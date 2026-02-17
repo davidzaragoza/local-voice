@@ -80,4 +80,4 @@ config/settings.json
 *.dist/
 *.onefile-build/
 *.pyd
-*.so.*
+*.so.*nuitka-crash-report.xml

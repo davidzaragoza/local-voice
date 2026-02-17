@@ -3,12 +3,12 @@
 from enum import Enum
 from typing import Optional, Callable
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QFrame, QMenu, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal, QPropertyAnimation, QEasingCurve, QPoint
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QCursor, QIcon, QAction
+from PySide6.QtCore import Qt, QTimer, QSize, Signal, QPropertyAnimation, QEasingCurve, QPoint
+from PySide6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QCursor, QIcon, QAction
 
 
 class AppState(Enum):
@@ -160,10 +160,10 @@ class MicButton(QPushButton):
 
 
 class FloatingWindow(QWidget):
-    recording_toggled = pyqtSignal(bool)
-    settings_requested = pyqtSignal()
-    quit_requested = pyqtSignal()
-    _state_change_requested = pyqtSignal(object)
+    recording_toggled = Signal(bool)
+    settings_requested = Signal()
+    quit_requested = Signal()
+    _state_change_requested = Signal(object)
     
     def __init__(self, parent=None):
         super().__init__(parent)

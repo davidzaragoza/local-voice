@@ -6,8 +6,8 @@ import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QSettings, QTimer
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QSettings, QTimer
 
 from .gui.main_window import FloatingWindow, AppState
 from .gui.tray_icon import TrayIcon
@@ -19,7 +19,7 @@ from .hotkey.manager import HotkeyManager, HotkeyConfig
 
 
 class TranscriptionWorker(QObject):
-    finished = pyqtSignal()
+    finished = Signal()
     
     def __init__(self, engine: TranscriptionEngine, audio_data, language: Optional[str] = None, task: str = "transcribe", parent=None):
         super().__init__(parent)
@@ -105,10 +105,10 @@ class SettingsManager:
 
 
 class LocalVoiceApp(QObject):
-    injection_complete = pyqtSignal()
-    start_recording_requested = pyqtSignal()
-    stop_recording_requested = pyqtSignal()
-    toggle_recording_requested = pyqtSignal()
+    injection_complete = Signal()
+    start_recording_requested = Signal()
+    stop_recording_requested = Signal()
+    toggle_recording_requested = Signal()
     
     def __init__(self, app: QApplication):
         super().__init__()
@@ -372,7 +372,7 @@ def main():
     
     app.setStyle('Fusion')
     
-    from PyQt6.QtGui import QPalette, QColor
+    from PySide6.QtGui import QPalette, QColor
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
