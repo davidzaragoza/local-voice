@@ -74,3 +74,10 @@ config/settings.json
 
 # Model files (large, downloaded separately)
 .localvoice/
+
+# Nuitka build artifacts
+*.build/
+*.dist/
+*.onefile-build/
+*.pyd
+*.so.*
