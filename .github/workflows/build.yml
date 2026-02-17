@@ -63,6 +63,7 @@ jobs:
             --file-description="Offline voice-to-text desktop utility" `
             --windows-console-mode=disable `
             --include-package=src `
+            --assume-yes-for-downloads `
             localvoice.py
 
       - name: Build with Nuitka (Linux)
@@ -96,7 +97,7 @@ jobs:
             echo "path=dist/LocalVoice.exe" >> $GITHUB_OUTPUT
           elif [ "${{ runner.os }}" = "Linux" ]; then
             echo "name=LocalVoice-Linux" >> $GITHUB_OUTPUT
-            echo "path=dist/LocalVoice.bin" >> $GITHUB_OUTPUT
+            echo "path=dist/LocalVoice" >> $GITHUB_OUTPUT
           else
             echo "name=LocalVoice-macOS" >> $GITHUB_OUTPUT
             echo "path=dist/localvoice.app" >> $GITHUB_OUTPUT
