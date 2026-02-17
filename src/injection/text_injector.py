@@ -7,7 +7,6 @@ from typing import Optional, Callable
 from dataclasses import dataclass
 
 import pyperclip
-import pywinctl
 from pynput import keyboard
 
 
@@ -29,35 +28,11 @@ class TextInjector:
     def __init__(self, config: Optional[InjectionConfig] = None):
         self.config = config or InjectionConfig()
         self._keyboard_controller = keyboard.Controller()
-        self._last_active_window: Optional[object] = None
         self._clipboard_backup: Optional[str] = None
         self._on_complete_callback: Optional[Callable[[], None]] = None
     
     def set_on_complete_callback(self, callback: Callable[[], None]):
         self._on_complete_callback = callback
-    
-    def capture_last_active_window(self) -> bool:
-        try:
-            active = pywinctl.getActiveWindow()
-            if active and active.title:
-                self._last_active_window = active
-                return True
-            return False
-        except Exception as e:
-            print(f"Failed to capture active window: {e}")
-            return False
-    
-    def restore_last_active_window(self) -> bool:
-        if self._last_active_window is None:
-            return False
-        
-        try:
-            self._last_active_window.activate()
-            time.sleep(0.1)
-            return True
-        except Exception as e:
-            print(f"Failed to restore window: {e}")
-            return False
     
     def _backup_clipboard(self) -> bool:
         if not self.config.preserve_clipboard:
@@ -88,10 +63,9 @@ class TextInjector:
             pyperclip.copy(text)
             time.sleep(0.05)
             
-            self.restore_last_active_window()
-            time.sleep(0.1)
+            modifier = self._get_modifier_key_for_platform()
             
-            with self._keyboard_controller.pressed(keyboard.Key.cmd):
+            with self._keyboard_controller.pressed(modifier):
                 self._keyboard_controller.press('v')
                 self._keyboard_controller.release('v')
             
@@ -105,9 +79,6 @@ class TextInjector:
     
     def inject_keyboard(self, text: str) -> bool:
         try:
-            self.restore_last_active_window()
-            time.sleep(0.1)
-            
             for char in text:
                 if char == '\n':
                     self._keyboard_controller.press(keyboard.Key.enter)
@@ -166,7 +137,7 @@ class TextInjector:
         thread.start()
     
     @staticmethod
-    def get_modifier_key_for_platform() -> keyboard.Key:
+    def _get_modifier_key_for_platform() -> keyboard.Key:
         import platform
         if platform.system() == 'Darwin':
             return keyboard.Key.cmd
@@ -174,26 +145,3 @@ class TextInjector:
             return keyboard.Key.ctrl
         else:
             return keyboard.Key.ctrl
-    
-    def inject_clipboard_platform_aware(self, text: str) -> bool:
-        try:
-            self._backup_clipboard()
-            pyperclip.copy(text)
-            time.sleep(0.05)
-            
-            self.restore_last_active_window()
-            time.sleep(0.1)
-            
-            modifier = self.get_modifier_key_for_platform()
-            
-            with self._keyboard_controller.pressed(modifier):
-                self._keyboard_controller.press('v')
-                self._keyboard_controller.release('v')
-            
-            time.sleep(0.1)
-            self._restore_clipboard()
-            return True
-            
-        except Exception as e:
-            print(f"Platform-aware clipboard injection failed: {e}")
-            return False

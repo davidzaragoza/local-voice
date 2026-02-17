@@ -122,7 +122,6 @@ local-voice/
 | Audio Processing | SoundDevice |
 | Global Hotkeys | pynput |
 | Text Injection | pyperclip + pynput |
-| Window Management | pywinctl |
 
 ## Configuration
 

@@ -190,8 +190,6 @@ class LocalVoiceApp(QObject):
         if self._is_recording or self._is_processing:
             return
         
-        self._injector.capture_last_active_window()
-        
         if self._recorder.start_recording():
             self._is_recording = True
             self._main_window.set_state(AppState.RECORDING)
