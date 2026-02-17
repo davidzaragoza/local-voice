@@ -1,0 +1,1 @@
+"""Global hotkey management modules."""
