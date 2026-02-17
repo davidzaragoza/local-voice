@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QSettings
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QSettings, QTimer
 
 from .gui.main_window import FloatingWindow, AppState
 from .gui.tray_icon import TrayIcon
@@ -292,16 +292,24 @@ class LocalVoiceApp(QObject):
         self._load_settings()
     
     def _quit(self):
+        self._is_recording = False
+        self._is_processing = False
+        
         self._hotkey_manager.stop()
         self._recorder.stop_recording()
         
         if self._transcription_worker and self._transcription_worker.isRunning():
-            self._transcription_worker.terminate()
-            self._transcription_worker.wait()
+            self._transcription_worker.quit()
+            if not self._transcription_worker.wait(2000):
+                self._transcription_worker.terminate()
+                self._transcription_worker.wait()
+            self._transcription_worker.deleteLater()
+            self._transcription_worker = None
         
         self._tray_icon.hide()
         self._main_window.close()
-        self._app.quit()
+        
+        QTimer.singleShot(100, self._app.quit)
 
 
 def main():

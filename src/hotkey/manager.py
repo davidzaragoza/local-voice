@@ -250,12 +250,17 @@ class HotkeyManager:
             return False
     
     def stop(self):
-        if self._listener:
-            self._listener.stop()
-            self._listener = None
         self._running = False
         self._key_pressed = False
         self._modifiers_pressed.clear()
+        
+        if self._listener:
+            try:
+                self._listener.stop()
+                self._listener.join(timeout=2.0)
+            except Exception:
+                pass
+            self._listener = None
     
     def update_config(self, config: HotkeyConfig):
         with self._lock:
