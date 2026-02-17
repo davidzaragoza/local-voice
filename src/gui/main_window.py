@@ -163,12 +163,15 @@ class FloatingWindow(QWidget):
     recording_toggled = pyqtSignal(bool)
     settings_requested = pyqtSignal()
     quit_requested = pyqtSignal()
+    _state_change_requested = pyqtSignal(object)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._state = AppState.IDLE
         self._drag_pos = None
         self._opacity = 0.95
+        
+        self._state_change_requested.connect(self._do_set_state)
         
         self._init_ui()
     
@@ -206,6 +209,9 @@ class FloatingWindow(QWidget):
             self.set_state(AppState.IDLE)
     
     def set_state(self, state: AppState):
+        self._state_change_requested.emit(state)
+    
+    def _do_set_state(self, state: AppState):
         self._state = state
         self.mic_button.state = state
     

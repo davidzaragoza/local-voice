@@ -13,12 +13,15 @@ class TrayIcon(QSystemTrayIcon):
     settings_requested = pyqtSignal()
     quit_requested = pyqtSignal()
     recording_toggled = pyqtSignal(bool)
+    _state_change_requested = pyqtSignal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._is_recording = False
         self._create_icons()
         self._create_menu()
+        
+        self._state_change_requested.connect(self._do_set_state)
         
         self.activated.connect(self._on_activated)
         self.setIcon(self._idle_icon)
@@ -109,10 +112,13 @@ class TrayIcon(QSystemTrayIcon):
         self.setContextMenu(self._menu)
     
     def _on_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.show_window_requested.emit()
-        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self._toggle_recording()
+        try:
+            if reason == QSystemTrayIcon.ActivationReason.Trigger:
+                self.show_window_requested.emit()
+            elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+                self._toggle_recording()
+        except Exception:
+            pass
     
     def _toggle_recording(self):
         self._is_recording = not self._is_recording
@@ -124,6 +130,9 @@ class TrayIcon(QSystemTrayIcon):
         self._update_state()
     
     def set_state(self, state: str):
+        self._state_change_requested.emit(state)
+    
+    def _do_set_state(self, state: str):
         if state == "idle":
             self.setIcon(self._idle_icon)
             self.setToolTip("LocalVoice - Ready")

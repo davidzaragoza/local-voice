@@ -86,6 +86,9 @@ class SettingsManager:
 
 class LocalVoiceApp(QObject):
     injection_complete = pyqtSignal()
+    start_recording_requested = pyqtSignal()
+    stop_recording_requested = pyqtSignal()
+    toggle_recording_requested = pyqtSignal()
     
     def __init__(self, app: QApplication):
         super().__init__()
@@ -128,12 +131,25 @@ class LocalVoiceApp(QObject):
         self._tray_icon.settings_requested.connect(self._show_settings)
         self._tray_icon.quit_requested.connect(self._quit)
         
-        self._hotkey_manager.set_on_start(self._start_recording)
-        self._hotkey_manager.set_on_stop(self._stop_recording)
-        self._hotkey_manager.set_on_toggle(self._toggle_recording)
+        self._hotkey_manager.set_on_start(self._emit_start_recording)
+        self._hotkey_manager.set_on_stop(self._emit_stop_recording)
+        self._hotkey_manager.set_on_toggle(self._emit_toggle_recording)
+        
+        self.start_recording_requested.connect(self._start_recording)
+        self.stop_recording_requested.connect(self._stop_recording)
+        self.toggle_recording_requested.connect(self._toggle_recording)
         
         self._injector.set_on_complete_callback(self._emit_injection_complete)
         self.injection_complete.connect(self._on_injection_complete)
+    
+    def _emit_start_recording(self):
+        self.start_recording_requested.emit()
+    
+    def _emit_stop_recording(self):
+        self.stop_recording_requested.emit()
+    
+    def _emit_toggle_recording(self):
+        self.toggle_recording_requested.emit()
     
     def _load_settings(self):
         settings = self._settings_manager.get_settings()
@@ -223,6 +239,10 @@ class LocalVoiceApp(QObject):
                 self._on_transcription_error("Failed to load model")
                 return
         
+        if self._transcription_worker and self._transcription_worker.isRunning():
+            self._transcription_worker.terminate()
+            self._transcription_worker.wait()
+        
         self._transcription_worker = TranscriptionWorker(
             self._engine, audio_data, language
         )
@@ -232,7 +252,9 @@ class LocalVoiceApp(QObject):
     
     def _on_transcription_finished(self, text: str):
         self._is_processing = False
-        self._transcription_worker = None
+        if self._transcription_worker:
+            self._transcription_worker.deleteLater()
+            self._transcription_worker = None
         
         if text.strip():
             self._injector.inject_async(text)
@@ -242,7 +264,9 @@ class LocalVoiceApp(QObject):
     
     def _on_transcription_error(self, error: str):
         self._is_processing = False
-        self._transcription_worker = None
+        if self._transcription_worker:
+            self._transcription_worker.deleteLater()
+            self._transcription_worker = None
         self._main_window.set_state(AppState.ERROR)
         self._tray_icon.set_state("error")
         
@@ -272,6 +296,11 @@ class LocalVoiceApp(QObject):
     def _quit(self):
         self._hotkey_manager.stop()
         self._recorder.stop_recording()
+        
+        if self._transcription_worker and self._transcription_worker.isRunning():
+            self._transcription_worker.terminate()
+            self._transcription_worker.wait()
+        
         self._tray_icon.hide()
         self._main_window.close()
         self._app.quit()
