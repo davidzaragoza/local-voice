@@ -19,8 +19,8 @@ from .hotkey.manager import HotkeyManager, HotkeyConfig
 
 
 class TranscriptionWorker(QThread):
-    finished = pyqtSignal(str)
-    error = pyqtSignal(str)
+    transcription_done = pyqtSignal(str)
+    transcription_error = pyqtSignal(str)
     
     def __init__(self, engine: TranscriptionEngine, audio_data, language: Optional[str] = None, task: str = "transcribe"):
         super().__init__()
@@ -38,12 +38,12 @@ class TranscriptionWorker(QThread):
             if self._cancelled:
                 return
             if result and result.text.strip():
-                self.finished.emit(result.text)
+                self.transcription_done.emit(result.text)
             else:
-                self.finished.emit("")
+                self.transcription_done.emit("")
         except Exception as e:
             if not self._cancelled:
-                self.error.emit(str(e))
+                self.transcription_error.emit(str(e))
     
     def cancel(self):
         self._cancelled = True
@@ -261,17 +261,18 @@ class LocalVoiceApp(QObject):
         self._transcription_worker = TranscriptionWorker(
             self._engine, audio_data, language, task
         )
-        self._transcription_worker.finished.connect(self._on_transcription_finished)
-        self._transcription_worker.error.connect(self._on_transcription_error)
+        self._transcription_worker.transcription_done.connect(self._on_transcription_finished)
+        self._transcription_worker.transcription_error.connect(self._on_transcription_error)
+        self._transcription_worker.finished.connect(self._on_worker_thread_finished)
         self._transcription_worker.start()
+    
+    def _on_worker_thread_finished(self):
+        if self._transcription_worker:
+            self._transcription_worker.deleteLater()
     
     def _on_transcription_finished(self, text: str):
         self._is_processing = False
-        worker = self._transcription_worker
         self._transcription_worker = None
-        
-        if worker:
-            worker.deleteLater()
         
         if text.strip():
             self._injector.inject_async(text)
@@ -281,11 +282,7 @@ class LocalVoiceApp(QObject):
     
     def _on_transcription_error(self, error: str):
         self._is_processing = False
-        worker = self._transcription_worker
         self._transcription_worker = None
-        
-        if worker:
-            worker.deleteLater()
         
         self._main_window.set_state(AppState.ERROR)
         self._tray_icon.set_state("error")
