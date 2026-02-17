@@ -49,7 +49,6 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           python -m nuitka `
-            --standalone `
             --onefile `
             --enable-plugin=pyside6 `
             --output-filename=LocalVoice.exe `
@@ -59,35 +58,33 @@ jobs:
             --file-description="Offline voice-to-text desktop utility" `
             --windows-console-mode=disable `
             --include-data-dir=config=config `
-            --follow-imports `
-            src/main.py
+            --include-package=src `
+            localvoice.py
 
       - name: Build with Nuitka (Linux)
         if: runner.os == 'Linux'
         run: |
           python -m nuitka \
-            --standalone \
             --onefile \
             --enable-plugin=pyside6 \
             --output-filename=LocalVoice \
             --output-dir=dist \
             --include-data-dir=config=config \
-            --follow-imports \
-            src/main.py
+            --include-package=src \
+            localvoice.py
 
       - name: Build with Nuitka (macOS)
         if: runner.os == 'macOS'
         run: |
           python -m nuitka \
-            --standalone \
+            --mode=app \
             --enable-plugin=pyside6 \
             --output-filename=LocalVoice \
             --output-dir=dist \
-            --macos-create-app-bundle \
             --macos-app-name=LocalVoice \
             --include-data-dir=config=config \
-            --follow-imports \
-            src/main.py
+            --include-package=src \
+            localvoice.py
 
       - name: Get artifact name
         id: artifact
@@ -97,10 +94,10 @@ jobs:
             echo "path=dist/LocalVoice.exe" >> $GITHUB_OUTPUT
           elif [ "${{ runner.os }}" = "Linux" ]; then
             echo "name=LocalVoice-Linux" >> $GITHUB_OUTPUT
-            echo "path=dist/LocalVoice" >> $GITHUB_OUTPUT
+            echo "path=dist/LocalVoice.bin" >> $GITHUB_OUTPUT
           else
             echo "name=LocalVoice-macOS" >> $GITHUB_OUTPUT
-            echo "path=dist/LocalVoice.app" >> $GITHUB_OUTPUT
+            echo "path=dist/localvoice.app" >> $GITHUB_OUTPUT
           fi
         shell: bash
 
