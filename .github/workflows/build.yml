@@ -88,6 +88,8 @@ jobs:
             --macos-app-name=LocalVoice \
             --include-package=src \
             localvoice.py
+          
+          cd dist && zip -r LocalVoice-macOS.zip localvoice.app
 
       - name: Get artifact name
         id: artifact
@@ -100,7 +102,7 @@ jobs:
             echo "path=dist/LocalVoice" >> $GITHUB_OUTPUT
           else
             echo "name=LocalVoice-macOS" >> $GITHUB_OUTPUT
-            echo "path=dist/localvoice.app" >> $GITHUB_OUTPUT
+            echo "path=dist/LocalVoice-macOS.zip" >> $GITHUB_OUTPUT
           fi
         shell: bash
 
