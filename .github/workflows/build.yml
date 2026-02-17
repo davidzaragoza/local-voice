@@ -45,6 +45,9 @@ jobs:
           pip install nuitka
           pip install -r requirements.txt
 
+      - name: Create config directory
+        run: mkdir -p config
+
       - name: Build with Nuitka (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -55,9 +58,10 @@ jobs:
             --output-dir=dist `
             --company-name="LocalVoice" `
             --product-name="LocalVoice" `
+            --file-version=1.0.0 `
+            --product-version=1.0.0 `
             --file-description="Offline voice-to-text desktop utility" `
             --windows-console-mode=disable `
-            --include-data-dir=config=config `
             --include-package=src `
             localvoice.py
 
@@ -69,7 +73,6 @@ jobs:
             --enable-plugin=pyside6 \
             --output-filename=LocalVoice \
             --output-dir=dist \
-            --include-data-dir=config=config \
             --include-package=src \
             localvoice.py
 
@@ -82,7 +85,6 @@ jobs:
             --output-filename=LocalVoice \
             --output-dir=dist \
             --macos-app-name=LocalVoice \
-            --include-data-dir=config=config \
             --include-package=src \
             localvoice.py
 
