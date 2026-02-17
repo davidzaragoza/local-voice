@@ -146,6 +146,7 @@ class TranscriptionEngine:
         self,
         audio: np.ndarray,
         language: Optional[str] = None,
+        task: str = "transcribe",
         callback: Optional[Callable[[str], None]] = None
     ) -> Optional[TranscriptionResult]:
         if self._model is None:
@@ -161,6 +162,7 @@ class TranscriptionEngine:
             segments_generator, info = self._model.transcribe(
                 audio_float,
                 language=language or self._current_config.language,
+                task=task,
                 beam_size=self._current_config.beam_size,
                 best_of=self._current_config.best_of,
                 temperature=self._current_config.temperature,
@@ -201,7 +203,8 @@ class TranscriptionEngine:
     def transcribe_realtime(
         self,
         audio: np.ndarray,
-        language: Optional[str] = None
+        language: Optional[str] = None,
+        task: str = "transcribe"
     ) -> Generator[str, None, None]:
         if self._model is None:
             if not self.load_model():
@@ -216,6 +219,7 @@ class TranscriptionEngine:
             segments_generator, _ = self._model.transcribe(
                 audio_float,
                 language=language or self._current_config.language,
+                task=task,
                 beam_size=self._current_config.beam_size,
                 vad_filter=self._current_config.vad_filter
             )

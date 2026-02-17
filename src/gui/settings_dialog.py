@@ -228,6 +228,7 @@ class SettingsDialog(QDialog):
         return {
             'model_size': 'base',
             'language': 'auto',
+            'translate_to_english': False,
             'hotkey': 'caps_lock',
             'hotkey_mode': 'hold',
             'injection_method': 'clipboard',
@@ -281,6 +282,16 @@ class SettingsDialog(QDialog):
         ])
         language_layout.addRow("Speech Language:", self.language_combo)
         layout.addWidget(language_group)
+        
+        translation_group = QGroupBox("Translation")
+        translation_layout = QVBoxLayout(translation_group)
+        self.translate_to_english = QCheckBox("Translate to English")
+        self.translate_to_english.setToolTip("Transcribe speech and output text in English regardless of input language")
+        translation_layout.addWidget(self.translate_to_english)
+        translation_info = QLabel("When enabled, speech in any language will be\ntranscribed and translated to English text.")
+        translation_info.setStyleSheet("color: #888; font-size: 11px;")
+        translation_layout.addWidget(translation_info)
+        layout.addWidget(translation_group)
         
         opacity_group = QGroupBox("Window")
         opacity_layout = QVBoxLayout(opacity_group)
@@ -465,6 +476,7 @@ class SettingsDialog(QDialog):
                     break
         
         self.start_minimized.setChecked(settings.get('start_minimized', False))
+        self.translate_to_english.setChecked(settings.get('translate_to_english', False))
         self.add_trailing_space.setChecked(settings.get('add_trailing_space', True))
         self.preserve_clipboard.setChecked(settings.get('preserve_clipboard', True))
         self.typing_delay.setValue(settings.get('typing_delay', 10))
@@ -498,6 +510,7 @@ class SettingsDialog(QDialog):
         return {
             'model_size': self.model_combo.currentData(),
             'language': language_name_to_code.get(language_text, 'auto'),
+            'translate_to_english': self.translate_to_english.isChecked(),
             'hotkey': self.hotkey_recorder.get_hotkey(),
             'hotkey_mode': 'hold' if self.mode_hold.isChecked() else 'toggle',
             'injection_method': injection_method,

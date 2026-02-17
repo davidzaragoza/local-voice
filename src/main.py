@@ -22,18 +22,19 @@ class TranscriptionWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
     
-    def __init__(self, engine: TranscriptionEngine, audio_data, language: Optional[str] = None):
+    def __init__(self, engine: TranscriptionEngine, audio_data, language: Optional[str] = None, task: str = "transcribe"):
         super().__init__()
         self._engine = engine
         self._audio_data = audio_data
         self._language = language
+        self._task = task
         self._cancelled = False
     
     def run(self):
         try:
             if self._cancelled:
                 return
-            result = self._engine.transcribe(self._audio_data, self._language)
+            result = self._engine.transcribe(self._audio_data, self._language, self._task)
             if self._cancelled:
                 return
             if result and result.text.strip():
@@ -58,6 +59,7 @@ class SettingsManager:
         return {
             'model_size': 'base',
             'language': 'auto',
+            'translate_to_english': False,
             'hotkey': 'caps_lock',
             'hotkey_mode': 'hold',
             'injection_method': 'clipboard',
@@ -240,6 +242,9 @@ class LocalVoiceApp(QObject):
         if language == 'auto':
             language = None
         
+        translate_to_english = settings.get('translate_to_english', False)
+        task = "translate" if translate_to_english else "transcribe"
+        
         model_size = settings.get('model_size', 'base')
         device = settings.get('device', 'auto')
         
@@ -254,7 +259,7 @@ class LocalVoiceApp(QObject):
                 return
         
         self._transcription_worker = TranscriptionWorker(
-            self._engine, audio_data, language
+            self._engine, audio_data, language, task
         )
         self._transcription_worker.finished.connect(self._on_transcription_finished)
         self._transcription_worker.error.connect(self._on_transcription_error)
