@@ -18,17 +18,18 @@ from .injection.text_injector import TextInjector, InjectionConfig, InjectionMet
 from .hotkey.manager import HotkeyManager, HotkeyConfig
 
 
-class TranscriptionWorker(QThread):
-    transcription_done = pyqtSignal(str)
-    transcription_error = pyqtSignal(str)
+class TranscriptionWorker(QObject):
+    finished = pyqtSignal()
     
-    def __init__(self, engine: TranscriptionEngine, audio_data, language: Optional[str] = None, task: str = "transcribe"):
-        super().__init__()
+    def __init__(self, engine: TranscriptionEngine, audio_data, language: Optional[str] = None, task: str = "transcribe", parent=None):
+        super().__init__(parent)
         self._engine = engine
         self._audio_data = audio_data
         self._language = language
         self._task = task
         self._cancelled = False
+        self._result_text = ""
+        self._error_msg = ""
     
     def run(self):
         try:
@@ -38,12 +39,20 @@ class TranscriptionWorker(QThread):
             if self._cancelled:
                 return
             if result and result.text.strip():
-                self.transcription_done.emit(result.text)
+                self._result_text = result.text
             else:
-                self.transcription_done.emit("")
+                self._result_text = ""
         except Exception as e:
             if not self._cancelled:
-                self.transcription_error.emit(str(e))
+                self._error_msg = str(e)
+        finally:
+            self.finished.emit()
+    
+    def get_result(self) -> str:
+        return self._result_text
+    
+    def get_error(self) -> str:
+        return self._error_msg
     
     def cancel(self):
         self._cancelled = True
@@ -114,6 +123,7 @@ class LocalVoiceApp(QObject):
         self._main_window: Optional[FloatingWindow] = None
         self._tray_icon: Optional[TrayIcon] = None
         self._transcription_worker: Optional[TranscriptionWorker] = None
+        self._transcription_thread: Optional[QThread] = None
         
         self._is_recording = False
         self._is_processing = False
@@ -230,12 +240,15 @@ class LocalVoiceApp(QObject):
         self._main_window.set_state(AppState.PROCESSING)
         self._tray_icon.set_state("processing")
         
-        if self._transcription_worker and self._transcription_worker.isRunning():
-            self._transcription_worker.cancel()
-            self._transcription_worker.quit()
-            if not self._transcription_worker.wait(2000):
-                self._transcription_worker.terminate()
-                self._transcription_worker.wait()
+        if self._transcription_thread:
+            old_thread = self._transcription_thread
+            self._transcription_thread = None
+            if old_thread.isRunning():
+                old_thread.quit()
+                if not old_thread.wait(2000):
+                    old_thread.terminate()
+                    old_thread.wait()
+            old_thread.deleteLater()
         
         settings = self._settings_manager.get_settings()
         language = settings.get('language', 'auto')
@@ -255,43 +268,62 @@ class LocalVoiceApp(QObject):
         
         if not self._engine.is_model_loaded:
             if not self._engine.load_model(transcription_config):
-                self._on_transcription_error("Failed to load model")
+                self._is_processing = False
+                self._main_window.set_state(AppState.ERROR)
+                self._tray_icon.set_state("error")
+                QMessageBox.warning(
+                    self._main_window,
+                    "Transcription Error",
+                    "Failed to load model"
+                )
                 return
         
+        self._transcription_thread = QThread()
         self._transcription_worker = TranscriptionWorker(
             self._engine, audio_data, language, task
         )
-        self._transcription_worker.transcription_done.connect(self._on_transcription_finished)
-        self._transcription_worker.transcription_error.connect(self._on_transcription_error)
-        self._transcription_worker.finished.connect(self._on_worker_thread_finished)
-        self._transcription_worker.start()
-    
-    def _on_worker_thread_finished(self):
-        if self._transcription_worker:
-            self._transcription_worker.deleteLater()
-    
-    def _on_transcription_finished(self, text: str):
-        self._is_processing = False
-        self._transcription_worker = None
+        self._transcription_worker.moveToThread(self._transcription_thread)
         
-        if text.strip():
-            self._injector.inject_async(text)
+        self._transcription_thread.started.connect(self._transcription_worker.run)
+        self._transcription_worker.finished.connect(self._on_worker_finished)
+        self._transcription_worker.finished.connect(self._transcription_thread.quit)
+        
+        self._transcription_thread.start()
+    
+    def _on_worker_finished(self):
+        worker = self._transcription_worker
+        thread = self._transcription_thread
+        self._transcription_worker = None
+        self._transcription_thread = None
+        self._is_processing = False
+        
+        if not worker:
+            return
+        
+        error = worker.get_error()
+        if error:
+            self._main_window.set_state(AppState.ERROR)
+            self._tray_icon.set_state("error")
+            QMessageBox.warning(
+                self._main_window,
+                "Transcription Error",
+                f"Failed to transcribe audio: {error}"
+            )
         else:
-            self._main_window.set_state(AppState.IDLE)
-            self._tray_icon.set_state("idle")
-    
-    def _on_transcription_error(self, error: str):
-        self._is_processing = False
-        self._transcription_worker = None
+            text = worker.get_result()
+            if text.strip():
+                self._injector.inject_async(text)
+            else:
+                self._main_window.set_state(AppState.IDLE)
+                self._tray_icon.set_state("idle")
         
-        self._main_window.set_state(AppState.ERROR)
-        self._tray_icon.set_state("error")
-        
-        QMessageBox.warning(
-            self._main_window,
-            "Transcription Error",
-            f"Failed to transcribe audio: {error}"
-        )
+        if thread:
+            thread.quit()
+            if not thread.wait(1000):
+                thread.terminate()
+                thread.wait()
+            thread.deleteLater()
+        worker.deleteLater()
     
     def _emit_injection_complete(self):
         self.injection_complete.emit()
@@ -317,13 +349,11 @@ class LocalVoiceApp(QObject):
         self._hotkey_manager.stop()
         self._recorder.stop_recording()
         
-        if self._transcription_worker and self._transcription_worker.isRunning():
-            self._transcription_worker.quit()
-            if not self._transcription_worker.wait(2000):
-                self._transcription_worker.terminate()
-                self._transcription_worker.wait()
-            self._transcription_worker.deleteLater()
-            self._transcription_worker = None
+        if self._transcription_thread and self._transcription_thread.isRunning():
+            self._transcription_thread.quit()
+            if not self._transcription_thread.wait(2000):
+                self._transcription_thread.terminate()
+                self._transcription_thread.wait()
         
         self._tray_icon.hide()
         self._main_window.close()
