@@ -27,16 +27,25 @@ class TranscriptionWorker(QThread):
         self._engine = engine
         self._audio_data = audio_data
         self._language = language
+        self._cancelled = False
     
     def run(self):
         try:
+            if self._cancelled:
+                return
             result = self._engine.transcribe(self._audio_data, self._language)
+            if self._cancelled:
+                return
             if result and result.text.strip():
                 self.finished.emit(result.text)
             else:
                 self.finished.emit("")
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._cancelled:
+                self.error.emit(str(e))
+    
+    def cancel(self):
+        self._cancelled = True
 
 
 class SettingsManager:
@@ -219,6 +228,13 @@ class LocalVoiceApp(QObject):
         self._main_window.set_state(AppState.PROCESSING)
         self._tray_icon.set_state("processing")
         
+        if self._transcription_worker and self._transcription_worker.isRunning():
+            self._transcription_worker.cancel()
+            self._transcription_worker.quit()
+            if not self._transcription_worker.wait(2000):
+                self._transcription_worker.terminate()
+                self._transcription_worker.wait()
+        
         settings = self._settings_manager.get_settings()
         language = settings.get('language', 'auto')
         if language == 'auto':
@@ -237,10 +253,6 @@ class LocalVoiceApp(QObject):
                 self._on_transcription_error("Failed to load model")
                 return
         
-        if self._transcription_worker and self._transcription_worker.isRunning():
-            self._transcription_worker.terminate()
-            self._transcription_worker.wait()
-        
         self._transcription_worker = TranscriptionWorker(
             self._engine, audio_data, language
         )
@@ -250,9 +262,11 @@ class LocalVoiceApp(QObject):
     
     def _on_transcription_finished(self, text: str):
         self._is_processing = False
-        if self._transcription_worker:
-            self._transcription_worker.deleteLater()
-            self._transcription_worker = None
+        worker = self._transcription_worker
+        self._transcription_worker = None
+        
+        if worker:
+            worker.deleteLater()
         
         if text.strip():
             self._injector.inject_async(text)
@@ -262,9 +276,12 @@ class LocalVoiceApp(QObject):
     
     def _on_transcription_error(self, error: str):
         self._is_processing = False
-        if self._transcription_worker:
-            self._transcription_worker.deleteLater()
-            self._transcription_worker = None
+        worker = self._transcription_worker
+        self._transcription_worker = None
+        
+        if worker:
+            worker.deleteLater()
+        
         self._main_window.set_state(AppState.ERROR)
         self._tray_icon.set_state("error")
         
