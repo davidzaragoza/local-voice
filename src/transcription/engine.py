@@ -1,6 +1,8 @@
 """Transcription engine using faster-whisper for offline STT."""
 
 import os
+import urllib.request
+import logging
 import threading
 from pathlib import Path
 from typing import Optional, Callable, Generator
@@ -9,6 +11,11 @@ from enum import Enum
 
 import numpy as np
 from faster_whisper import WhisperModel
+
+logger = logging.getLogger(__name__)
+
+VAD_MODEL_URL = "https://raw.githubusercontent.com/SYSTRAN/faster-whisper/master/faster_whisper/assets/silero_vad_v6.onnx"
+VAD_MODEL_FILENAME = "silero_vad_v6.onnx"
 
 
 class ModelSize(Enum):
@@ -52,6 +59,7 @@ class TranscriptionEngine:
     _model: Optional[WhisperModel] = None
     _model_lock = threading.Lock()
     _current_config: Optional[TranscriptionConfig] = None
+    _vad_downloaded = False
     
     def __new__(cls):
         if cls._instance is None:
@@ -61,6 +69,33 @@ class TranscriptionEngine:
     def __init__(self):
         if self._current_config is None:
             self._current_config = TranscriptionConfig()
+        self._ensure_vad_model()
+    
+    def _ensure_vad_model(self):
+        """Ensure VAD model is available, download if needed."""
+        if self._vad_downloaded:
+            return
+        
+        try:
+            import faster_whisper
+            assets_dir = Path(faster_whisper.__file__).parent / "assets"
+            vad_path = assets_dir / VAD_MODEL_FILENAME
+            
+            if vad_path.exists():
+                logger.info(f"VAD model found at {vad_path}")
+                self._vad_downloaded = True
+                return
+            
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Downloading VAD model to {vad_path}...")
+            urllib.request.urlretrieve(VAD_MODEL_URL, vad_path)
+            logger.info("VAD model downloaded successfully")
+            self._vad_downloaded = True
+            
+        except Exception as e:
+            logger.warning(f"Could not download VAD model: {e}")
+            self._vad_downloaded = True
     
     @property
     def model_dir(self) -> Path:
