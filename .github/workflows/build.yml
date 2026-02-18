@@ -1,0 +1,140 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  APP_NAME: LocalVoice
+  APP_VERSION: ${{ github.ref_name || 'dev' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: 'pip'
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 libportaudiocpp0 portaudio19-dev
+          sudo apt-get install -y libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install nuitka
+          pip install -r requirements.txt
+
+      - name: Create config directory
+        run: mkdir -p config
+
+      - name: Build with Nuitka (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m nuitka `
+            --onefile `
+            --enable-plugin=pyside6 `
+            --output-filename=LocalVoice.exe `
+            --output-dir=dist `
+            --company-name="LocalVoice" `
+            --product-name="LocalVoice" `
+            --file-version=1.0.0 `
+            --product-version=1.0.0 `
+            --file-description="Offline voice-to-text desktop utility" `
+            --windows-console-mode=disable `
+            --include-package=src `
+            --assume-yes-for-downloads `
+            localvoice.py
+
+      - name: Build with Nuitka (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m nuitka \
+            --onefile \
+            --enable-plugin=pyside6 \
+            --output-filename=LocalVoice \
+            --output-dir=dist \
+            --include-package=src \
+            localvoice.py
+
+      - name: Build with Nuitka (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python -m nuitka \
+            --mode=app \
+            --enable-plugin=pyside6 \
+            --output-filename=LocalVoice \
+            --output-dir=dist \
+            --macos-app-name=LocalVoice \
+            --include-package=src \
+            localvoice.py
+          
+          cd dist && zip -r LocalVoice-macOS.zip localvoice.app
+
+      - name: Get artifact name
+        id: artifact
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "name=LocalVoice-Windows" >> $GITHUB_OUTPUT
+            echo "path=dist/LocalVoice.exe" >> $GITHUB_OUTPUT
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            echo "name=LocalVoice-Linux" >> $GITHUB_OUTPUT
+            echo "path=dist/LocalVoice" >> $GITHUB_OUTPUT
+          else
+            echo "name=LocalVoice-macOS" >> $GITHUB_OUTPUT
+            echo "path=dist/LocalVoice-macOS.zip" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.path }}
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

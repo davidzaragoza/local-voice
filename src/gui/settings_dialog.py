@@ -4,18 +4,18 @@ import json
 from pathlib import Path
 from typing import Optional, Dict, Any, Set, List
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QComboBox, QLabel, QPushButton, QCheckBox, QSlider,
     QGroupBox, QFormLayout, QSpinBox, QDialogButtonBox,
     QRadioButton, QButtonGroup, QLineEdit
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
-from PyQt6.QtGui import QKeyEvent, QKeySequence
+from PySide6.QtCore import Qt, Signal, QEvent, QTimer
+from PySide6.QtGui import QKeyEvent, QKeySequence
 
 
 class HotkeyRecorder(QLineEdit):
-    hotkey_recorded = pyqtSignal(str)
+    hotkey_recorded = Signal(str)
     
     KEY_MAP = {
         Qt.Key.Key_CapsLock: 'Caps Lock',
@@ -180,7 +180,7 @@ class HotkeyRecorder(QLineEdit):
 
 
 class SettingsDialog(QDialog):
-    settings_changed = pyqtSignal(dict)
+    settings_changed = Signal(dict)
     
     LANGUAGE_MAP = {
         'auto': 'Auto Detect',

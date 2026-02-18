@@ -2,18 +2,18 @@
 
 from typing import Optional, Callable
 
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
-from PyQt6.QtCore import pyqtSignal, QObject, Qt
+from PySide6.QtWidgets import QSystemTrayIcon, QMenu
+from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
+from PySide6.QtCore import Signal, QObject, Qt
 
 
 class TrayIcon(QSystemTrayIcon):
-    show_window_requested = pyqtSignal()
-    hide_window_requested = pyqtSignal()
-    settings_requested = pyqtSignal()
-    quit_requested = pyqtSignal()
-    recording_toggled = pyqtSignal(bool)
-    _state_change_requested = pyqtSignal(str)
+    show_window_requested = Signal()
+    hide_window_requested = Signal()
+    settings_requested = Signal()
+    quit_requested = Signal()
+    recording_toggled = Signal(bool)
+    _state_change_requested = Signal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
