@@ -3,11 +3,27 @@
 import sys
 import json
 import threading
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QSettings, QTimer
+
+log_dir = Path.home() / ".localvoice" / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+log_file = log_dir / "localvoice.log"
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("LocalVoice starting up...")
 
 from .gui.main_window import FloatingWindow, AppState
 from .gui.tray_icon import TrayIcon
@@ -209,23 +225,32 @@ class LocalVoiceApp(QObject):
     
     def _start_recording(self):
         if self._is_recording or self._is_processing:
+            logger.debug("Already recording or processing, skipping")
             return
         
+        logger.info("Starting recording...")
         if self._recorder.start_recording():
             self._is_recording = True
             self._main_window.set_state(AppState.RECORDING)
             self._tray_icon.set_state("recording")
+            logger.info("Recording started successfully")
+        else:
+            logger.error("Failed to start recording")
     
     def _stop_recording(self):
         if not self._is_recording:
+            logger.debug("Not recording, skipping stop")
             return
         
+        logger.info("Stopping recording...")
         audio_data = self._recorder.stop_recording()
         self._is_recording = False
         
         if audio_data is not None and len(audio_data) > 0:
+            logger.info(f"Recorded {len(audio_data)} audio samples, starting transcription")
             self._start_transcription(audio_data)
         else:
+            logger.warning("No audio data recorded")
             self._main_window.set_state(AppState.IDLE)
             self._tray_icon.set_state("idle")
     
@@ -298,10 +323,12 @@ class LocalVoiceApp(QObject):
         self._is_processing = False
         
         if not worker:
+            logger.warning("Worker is None in _on_worker_finished")
             return
         
         error = worker.get_error()
         if error:
+            logger.error(f"Transcription error: {error}")
             self._main_window.set_state(AppState.ERROR)
             self._tray_icon.set_state("error")
             QMessageBox.warning(
@@ -311,9 +338,12 @@ class LocalVoiceApp(QObject):
             )
         else:
             text = worker.get_result()
+            logger.info(f"Transcription result: {text[:100] if text else 'empty'}...")
             if text.strip():
+                logger.info("Starting text injection...")
                 self._injector.inject_async(text)
             else:
+                logger.warning("Transcription returned empty text")
                 self._main_window.set_state(AppState.IDLE)
                 self._tray_icon.set_state("idle")
         

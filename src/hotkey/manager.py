@@ -1,12 +1,15 @@
 """Global hotkey manager using pynput for cross-platform keyboard listening."""
 
 import threading
+import logging
 from typing import Callable, Optional, Set, List
 from dataclasses import dataclass, field
 from enum import Enum
 
 from pynput import keyboard
 from pynput.keyboard import Key, KeyCode
+
+logger = logging.getLogger(__name__)
 
 
 class HotkeyAction(Enum):
@@ -238,14 +241,17 @@ class HotkeyManager:
             return True
         
         try:
+            logger.info(f"Starting hotkey listener for: {self.config.hotkey} (mode: {self.config.mode})")
             self._listener = keyboard.Listener(
                 on_press=self._on_press,
                 on_release=self._on_release
             )
             self._listener.start()
             self._running = True
+            logger.info("Hotkey listener started successfully")
             return True
         except Exception as e:
+            logger.error(f"Failed to start hotkey listener: {e}")
             print(f"Failed to start hotkey listener: {e}")
             return False
     

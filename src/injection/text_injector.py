@@ -2,12 +2,15 @@
 
 import time
 import threading
+import logging
 from enum import Enum
 from typing import Optional, Callable
 from dataclasses import dataclass
 
 import pyperclip
 from pynput import keyboard
+
+logger = logging.getLogger(__name__)
 
 
 class InjectionMethod(Enum):
@@ -59,6 +62,7 @@ class TextInjector:
     
     def inject_clipboard(self, text: str) -> bool:
         try:
+            logger.info(f"Injecting text via clipboard: {text[:50]}...")
             self._backup_clipboard()
             pyperclip.copy(text)
             time.sleep(0.05)
@@ -71,14 +75,17 @@ class TextInjector:
             
             time.sleep(0.1)
             self._restore_clipboard()
+            logger.info("Clipboard injection successful")
             return True
             
         except Exception as e:
+            logger.error(f"Clipboard injection failed: {e}")
             print(f"Clipboard injection failed: {e}")
             return False
     
     def inject_keyboard(self, text: str) -> bool:
         try:
+            logger.info(f"Injecting text via keyboard: {text[:50]}...")
             for char in text:
                 if char == '\n':
                     self._keyboard_controller.press(keyboard.Key.enter)
@@ -92,9 +99,11 @@ class TextInjector:
                 if self.config.typing_delay > 0:
                     time.sleep(self.config.typing_delay)
             
+            logger.info("Keyboard injection successful")
             return True
             
         except Exception as e:
+            logger.error(f"Keyboard injection failed: {e}")
             print(f"Keyboard injection failed: {e}")
             return False
     
