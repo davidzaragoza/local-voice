@@ -94,6 +94,7 @@ class SettingsManager:
             'typing_delay': 10,
             'add_trailing_space': True,
             'preserve_clipboard': True,
+            'input_device': None,
         }
     
     def _load_from_file(self):
@@ -210,6 +211,10 @@ class LocalVoiceApp(QObject):
             preserve_clipboard=settings.get('preserve_clipboard', True)
         )
         self._injector.config = injection_config
+        
+        input_device = settings.get('input_device', None)
+        if input_device is not None:
+            self._recorder.set_input_device(input_device)
     
     def _on_recording_toggled(self, start: bool):
         if start:

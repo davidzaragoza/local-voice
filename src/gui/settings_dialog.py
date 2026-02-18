@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QEvent, QTimer
 from PySide6.QtGui import QKeyEvent, QKeySequence
 
+import sounddevice as sd
+
 
 class HotkeyRecorder(QLineEdit):
     hotkey_recorded = Signal(str)
@@ -237,6 +239,7 @@ class SettingsDialog(QDialog):
             'typing_delay': 10,
             'add_trailing_space': True,
             'preserve_clipboard': True,
+            'input_device': None,
         }
     
     def _init_ui(self):
@@ -250,6 +253,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.tabs)
         
         self.tabs.addTab(self._create_general_tab(), "General")
+        self.tabs.addTab(self._create_audio_tab(), "Audio")
         self.tabs.addTab(self._create_model_tab(), "Model")
         self.tabs.addTab(self._create_hotkey_tab(), "Hotkey")
         self.tabs.addTab(self._create_injection_tab(), "Injection")
@@ -308,6 +312,47 @@ class SettingsDialog(QDialog):
         
         layout.addStretch()
         return widget
+    
+    def _create_audio_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        input_group = QGroupBox("Input Device")
+        input_layout = QVBoxLayout(input_group)
+        
+        info_label = QLabel("Select the microphone to use for recording.")
+        info_label.setStyleSheet("color: #888; font-size: 11px;")
+        info_label.setWordWrap(True)
+        input_layout.addWidget(info_label)
+        
+        self.input_device_combo = QComboBox()
+        self._populate_input_devices()
+        input_layout.addWidget(self.input_device_combo)
+        
+        refresh_btn = QPushButton("Refresh Devices")
+        refresh_btn.setFixedWidth(120)
+        refresh_btn.clicked.connect(self._populate_input_devices)
+        input_layout.addWidget(refresh_btn)
+        
+        layout.addWidget(input_group)
+        
+        layout.addStretch()
+        return widget
+    
+    def _populate_input_devices(self):
+        self.input_device_combo.clear()
+        self.input_device_combo.addItem("Default", None)
+        
+        try:
+            devices = sd.query_devices()
+            for i, device in enumerate(devices):
+                if device['max_input_channels'] > 0:
+                    name = device['name']
+                    if len(name) > 50:
+                        name = name[:47] + "..."
+                    self.input_device_combo.addItem(f"{name}", i)
+        except Exception as e:
+            self.input_device_combo.addItem("Error loading devices", None)
     
     def _create_model_tab(self) -> QWidget:
         widget = QWidget()
@@ -489,6 +534,12 @@ class SettingsDialog(QDialog):
             self.device_cpu.setChecked(True)
         else:
             self.device_gpu.setChecked(True)
+        
+        input_device = settings.get('input_device', None)
+        for i in range(self.input_device_combo.count()):
+            if self.input_device_combo.itemData(i) == input_device:
+                self.input_device_combo.setCurrentIndex(i)
+                break
     
     def get_settings(self) -> Dict[str, Any]:
         language_code_to_name = self.LANGUAGE_MAP
@@ -520,6 +571,7 @@ class SettingsDialog(QDialog):
             'typing_delay': self.typing_delay.value(),
             'add_trailing_space': self.add_trailing_space.isChecked(),
             'preserve_clipboard': self.preserve_clipboard.isChecked(),
+            'input_device': self.input_device_combo.currentData(),
         }
     
     def _apply_settings(self):
