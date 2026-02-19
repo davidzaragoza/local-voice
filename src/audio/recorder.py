@@ -2,6 +2,7 @@
 
 import threading
 import logging
+import time
 from typing import Callable, Optional
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -42,6 +43,8 @@ class AudioRecorder:
         self._max_abs_level: float = 0.0
         self._active_sample_rate: int = self.config.sample_rate
         self._input_device_id: Optional[int] = None
+        self._recording_started_at: Optional[float] = None
+        self._captured_frames: int = 0
         
     @property
     def state(self) -> RecorderState:
@@ -71,6 +74,7 @@ class AudioRecorder:
         
         with self._lock:
             self._audio_buffer.append(audio_chunk)
+            self._captured_frames += int(frames)
         
         if self._on_audio_callback:
             self._on_audio_callback(audio_chunk)
@@ -109,6 +113,7 @@ class AudioRecorder:
             self._voice_detected = False
             self._silence_start = None
             self._max_abs_level = 0.0
+            self._captured_frames = 0
     
     def start_recording(self) -> bool:
         if self._state == RecorderState.RECORDING:
@@ -170,6 +175,7 @@ class AudioRecorder:
                 callback=self._audio_callback
             )
             self._stream.start()
+            self._recording_started_at = time.monotonic()
             return True
         except Exception as e:
             logger.error(f"Failed to start recording: {e}")
@@ -183,9 +189,23 @@ class AudioRecorder:
         self._state = RecorderState.STOPPING
         
         if self._stream:
-            self._stream.stop()
-            self._stream.close()
+            # Avoid driver instability on very short recordings by waiting briefly
+            # for at least one callback block before closing the stream.
+            if self._captured_frames == 0 and self._recording_started_at is not None:
+                elapsed = time.monotonic() - self._recording_started_at
+                min_elapsed = max(0.1, (self.config.block_size / float(self._active_sample_rate)) * 2.0)
+                if elapsed < min_elapsed:
+                    sd.sleep(int((min_elapsed - elapsed) * 1000))
+            try:
+                self._stream.stop()
+            except Exception as e:
+                logger.warning("Failed to stop input stream cleanly: %s", e)
+            try:
+                self._stream.close()
+            except Exception as e:
+                logger.warning("Failed to close input stream cleanly: %s", e)
             self._stream = None
+        self._recording_started_at = None
         
         audio_data = self.get_audio_data()
         self._state = RecorderState.IDLE

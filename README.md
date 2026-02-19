@@ -70,6 +70,12 @@ For Python 3.9, if installation fails during bytecode compilation, use:
 pipx install --pip-args="--no-compile" git+https://github.com/davidzaragoza/local-voice.git
 ```
 
+If your environment still fails with `TypeError: encode() argument 'encoding' must be str, not None`, run:
+
+```bash
+PYTHONIOENCODING=utf-8 pipx install --pip-args="--no-compile" git+https://github.com/davidzaragoza/local-voice.git
+```
+
 ### Option 3: Install from GitHub with `pip` (virtualenv)
 
 ```bash
@@ -84,6 +90,12 @@ If you're on Python 3.9 and hit a `PyCompileError` while installing `PySide6`, u
 
 ```bash
 pip install --no-compile git+https://github.com/davidzaragoza/local-voice.git
+```
+
+If your shell/environment reports `sys.stdout.encoding` issues, run:
+
+```bash
+PYTHONIOENCODING=utf-8 pip install --no-compile git+https://github.com/davidzaragoza/local-voice.git
 ```
 
 ### About "system-level" install on macOS

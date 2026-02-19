@@ -36,6 +36,8 @@ jobs:
           sudo apt-get install -y libportaudio2 libportaudiocpp0 portaudio19-dev
 
       - name: Install package
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python -m pip install --upgrade pip wheel
           pip install --no-compile .
