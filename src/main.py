@@ -52,6 +52,16 @@ from .transcription.engine import TranscriptionEngine, TranscriptionConfig, Mode
 from .injection.text_injector import TextInjector, InjectionConfig, InjectionMethod
 from .hotkey.manager import HotkeyManager, HotkeyConfig
 from .profiles.manager import ProfileManager
+from .macos_permissions import (
+    is_macos,
+    is_accessibility_trusted,
+    is_input_monitoring_trusted,
+    has_microphone_access,
+    open_privacy_settings,
+    PERMISSION_MICROPHONE,
+    PERMISSION_ACCESSIBILITY,
+    PERMISSION_INPUT_MONITORING,
+)
 
 
 class TranscriptionWorker(QObject):
@@ -126,6 +136,9 @@ class LocalVoiceApp(QObject):
         
         self._init_components()
         self._connect_signals()
+        if not self._ensure_macos_pro_permissions():
+            QTimer.singleShot(0, self._app.quit)
+            return
         self._load_settings()
     
     def _init_components(self):
@@ -170,6 +183,66 @@ class LocalVoiceApp(QObject):
     
     def _emit_toggle_recording(self):
         self.toggle_recording_requested.emit()
+
+    def _missing_macos_permissions(self) -> list[str]:
+        missing = []
+        mic_access = has_microphone_access(request_prompt=False)
+        if mic_access is None:
+            mic_access = self._probe_microphone_access()
+        if not mic_access:
+            missing.append(PERMISSION_MICROPHONE)
+        if not is_accessibility_trusted(request_prompt=False):
+            missing.append(PERMISSION_ACCESSIBILITY)
+        if not is_input_monitoring_trusted(request_prompt=False):
+            missing.append(PERMISSION_INPUT_MONITORING)
+        return missing
+
+    def _probe_microphone_access(self) -> bool:
+        try:
+            started = self._recorder.start_recording()
+            if started:
+                self._recorder.stop_recording()
+            return started
+        except Exception:
+            return False
+
+    def _request_macos_permissions(self):
+        mic_status = has_microphone_access(request_prompt=True)
+        if mic_status is None:
+            _ = self._probe_microphone_access()
+        _ = is_accessibility_trusted(request_prompt=True)
+        _ = is_input_monitoring_trusted(request_prompt=True)
+
+    def _ensure_macos_pro_permissions(self) -> bool:
+        if not is_macos():
+            return True
+
+        self._request_macos_permissions()
+
+        while True:
+            missing = self._missing_macos_permissions()
+            if not missing:
+                logger.info("All required macOS permissions granted")
+                return True
+
+            for permission_name in missing:
+                open_privacy_settings(permission_name)
+
+            msg = QMessageBox(self._main_window)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Permissions Required")
+            msg.setText("LocalVoice requires full PRO permissions to work.")
+            msg.setInformativeText(
+                "Enable all permissions in System Settings, then click Retry.\n\n"
+                f"Missing: {', '.join(missing)}"
+            )
+            retry_button = msg.addButton("Retry", QMessageBox.ButtonRole.AcceptRole)
+            quit_button = msg.addButton("Quit", QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(retry_button)
+            msg.exec()
+
+            if msg.clickedButton() == quit_button:
+                return False
     
     def _load_settings(self):
         global_settings = self._profile_manager.get_global_settings()
