@@ -28,7 +28,7 @@ Key goal: local-first dictation with no cloud dependency for transcription.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.9+
 - PortAudio (for microphone capture via `sounddevice`)
 
 ## Installation
