@@ -1,113 +1,179 @@
 # LocalVoice
 
-A lightweight, cross-platform desktop utility for offline voice-to-text transcription. LocalVoice sits as a small floating window, allowing you to dictate text that gets automatically inserted into any application.
+LocalVoice is a lightweight desktop utility for offline voice-to-text transcription. It runs as a floating microphone window and inserts transcribed text into other applications.
 
-**Key Feature:** 100% offline operation ensuring total privacy.
+Key goal: local-first dictation with no cloud dependency for transcription.
 
 ## Features
 
-- **Push-to-Talk:** Click the microphone button or use global hotkeys
-- **Global Hotkeys:** Record custom key combinations (e.g., `Ctrl+Shift`, `F10`, `Caps Lock`)
-- **Two Activation Modes:**
-  - **Hold:** Hold key(s) to record, release to stop
-  - **Toggle:** Press once to start, press again to stop
-- **Multi-Language Support:** Auto-detect or choose from 16+ languages
-- **Flexible Text Injection:** Clipboard paste or keyboard simulation
-- **System Tray:** Minimize to tray, quick access menu
-- **GPU Acceleration:** Automatic CUDA detection for faster transcription
+- Offline speech-to-text using `faster-whisper`
+- Push-to-talk from floating window or global hotkey
+- Hotkey modes: hold-to-record and toggle
+- Recording duration display while dictating
+- Hotkey + active profile shown in tooltip
+- Multi-profile settings with quick tray profile switching
+- Per-profile language and optional translate-to-English mode
+- Per-profile model/device selection (`auto`, `cpu`, `cuda`)
+- Text injection methods:
+  - Clipboard paste
+  - Keyboard typing simulation
+  - Clipboard with keyboard fallback
+- Copy-only mode (copy to clipboard without auto-paste)
+- Custom vocabulary:
+  - Priority words (prompt hinting)
+  - Substitution rules (post-processing replacements)
+- Transcription history with search, delete, clear, and JSON export
+- Optional start/stop feedback sounds
+- Dark and light themes
+
+## Requirements
+
+- Python 3.10+
+- PortAudio (for microphone capture via `sounddevice`)
 
 ## Installation
 
-### Requirements
-- Python 3.10+
-- PortAudio (for audio capture)
-
-### Setup
+### Option 1: Run from source (current workflow)
 
 ```bash
-# Clone the repository
+# Clone
 git clone <repository-url>
 cd local-voice
 
 # Install dependencies
 pip install -r requirements.txt
 
-# (Optional) Pre-download model for offline use
+# Optional: pre-download model(s)
 python download_models.py base
 
-# Run the application
+# Run
 python -m src.main
 ```
 
-### macOS Permissions
+You can also run the entry script:
 
-On macOS, you need to grant:
-1. **Microphone access** - When prompted, allow LocalVoice to use the microphone
-2. **Accessibility access** - System Preferences → Privacy & Security → Accessibility → Add Terminal/Python
+```bash
+python localvoice.py
+```
+
+### Option 2: Install from GitHub with `pipx` (recommended)
+
+```bash
+pipx install git+https://github.com/davidzaragoza/local-voice.git
+localvoice
+```
+
+This installs LocalVoice from the repository and exposes `localvoice` as a global command in your user environment.
+
+### Option 3: Install from GitHub with `pip` (virtualenv)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install git+https://github.com/davidzaragoza/local-voice.git
+localvoice
+```
+
+### About "system-level" install on macOS
+
+- `pipx` is the safest way to get a global command without `sudo`.
+- A true system install (`sudo pip install ...`) is possible but not recommended on macOS because it can break system Python environments.
+
+## macOS permissions
+
+On macOS, grant:
+
+1. Microphone access
+2. Accessibility access (for global hotkeys and text injection)
+3. Input Monitoring access (for global hotkey listening)
+
+System Settings -> Privacy & Security -> Accessibility
+System Settings -> Privacy & Security -> Input Monitoring
+
+Important: grant permissions to the installed `localvoice.app` binary (the one in `/Applications`), not only to your Python interpreter.
+The macOS build uses a stable bundle identifier so permissions persist better across updates.
+
+## macOS bundle security troubleshooting
+
+If you install `localvoice.app` and macOS blocks it, try:
+
+1. If macOS says: `"LocalVoice" is damaged and can't be opened`:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/localvoice.app
+codesign --force --deep --sign - /Applications/localvoice.app
+```
+
+2. Re-grant permissions for the installed app path:
+
+- System Settings -> Privacy & Security -> Microphone
+- System Settings -> Privacy & Security -> Accessibility
+- System Settings -> Privacy & Security -> Input Monitoring
+
+3. If permissions seem stuck, remove `localvoice.app` from those lists, add it again, and restart the app.
 
 ## Usage
 
-### Basic Operation
+1. Start recording from the mic button or your configured hotkey.
+2. Speak.
+3. Stop recording (release hotkey in hold mode, or trigger again in toggle mode).
+4. Transcribed text is inserted, or copied only if `copy_only` is enabled.
 
-1. **Click the microphone** or **press your hotkey** to start recording
-2. **Speak your text**
-3. **Click again** or **release hotkey** (hold mode) to stop
-4. Transcribed text is inserted at your cursor position
+## Settings Overview
 
-### Global Hotkeys
+The Settings dialog includes:
 
-Configure hotkeys in Settings → Hotkey:
-1. Click **Record**
-2. Press your desired key combination
-3. Choose **Hold** or **Toggle** mode
-4. Click **OK** to save
+- `General`: profiles, startup, language, translation, history, opacity, theme
+- `Audio`: input device and start/stop sounds
+- `Model`: Whisper model and processing device
+- `Hotkey`: recorded combination and hold/toggle mode
+- `Injection`: insertion method, copy-only, trailing space, clipboard preservation, typing delay
+- `Vocabulary`: custom words and substitutions
 
-**Examples:**
-- `Caps Lock` (Hold) - Hold to record
-- `F10` (Toggle) - Press to start/stop
-- `Ctrl+Shift` (Hold) - Hold both to record
-- `Alt+A` (Toggle) - Press combination to toggle
+## Model Sizes
 
-### Settings
-
-| Tab | Options |
-|-----|---------|
-| **General** | Start minimized, language, window opacity |
-| **Model** | Whisper model size, processing device (Auto/CPU/GPU) |
-| **Hotkey** | Record custom hotkey, hold/toggle mode |
-| **Injection** | Text insertion method, trailing space, clipboard preservation |
-
-### Model Sizes
-
-| Model | Size | Speed | Accuracy |
-|-------|------|-------|----------|
-| Tiny | 39MB | Fastest | Basic |
-| Base | 74MB | Fast | Good |
-| Small | 244MB | Medium | Better |
+| Model | Params | Speed | Accuracy |
+|-------|--------|-------|----------|
+| Tiny | 39M | Fastest | Basic |
+| Base | 74M | Fast | Good |
+| Small | 244M | Medium | Better |
 | Medium | 769M | Slow | High |
 | Large v3 | 1550M | Slowest | Best |
 
 ## Project Structure
 
-```
+```text
 local-voice/
 ├── src/
-│   ├── main.py              # Application entry point
-│   ├── gui/
-│   │   ├── main_window.py   # Floating window UI
-│   │   ├── settings_dialog.py
-│   │   └── tray_icon.py
+│   ├── main.py
 │   ├── audio/
-│   │   └── recorder.py      # Audio capture with SoundDevice
-│   ├── transcription/
-│   │   └── engine.py        # faster-whisper integration
+│   │   ├── recorder.py
+│   │   └── sounds.py
+│   ├── gui/
+│   │   ├── main_window.py
+│   │   ├── settings_dialog.py
+│   │   ├── tray_icon.py
+│   │   └── themes.py
+│   ├── history/
+│   │   ├── manager.py
+│   │   └── dialog.py
+│   ├── hotkey/
+│   │   └── manager.py
 │   ├── injection/
-│   │   └── text_injector.py # Clipboard/keyboard injection
-│   └── hotkey/
-│       └── manager.py       # Global hotkey handling
+│   │   └── text_injector.py
+│   ├── profiles/
+│   │   └── manager.py
+│   ├── transcription/
+│   │   └── engine.py
+│   └── vocabulary/
+│       └── manager.py
+├── assets/
+│   └── bip.wav
 ├── config/
-│   └── settings.json        # User preferences
-├── download_models.py       # Pre-download models script
+│   └── settings.json
+├── download_models.py
+├── localvoice.py
 ├── requirements.txt
 └── pyproject.toml
 ```
@@ -116,65 +182,97 @@ local-voice/
 
 | Component | Technology |
 |-----------|------------|
-| Language | Python 3.10+ |
-| GUI Framework | PyQt6 |
-| STT Engine | faster-whisper (Optimized OpenAI Whisper) |
-| Audio Processing | SoundDevice |
-| Global Hotkeys | pynput |
-| Text Injection | pyperclip + pynput |
+| GUI | PySide6 |
+| STT | faster-whisper |
+| Audio capture | sounddevice |
+| Audio I/O | soundfile |
+| Hotkeys/input automation | pynput |
+| Clipboard | pyperclip |
+| Persistence | JSON + SQLite |
 
 ## Configuration
 
-Settings are stored in `config/settings.json`:
+Profile-aware settings are stored in `config/settings.json`.
 
 ```json
 {
-    "model_size": "base",
-    "language": "auto",
-    "hotkey": "caps_lock",
-    "hotkey_mode": "hold",
-    "injection_method": "clipboard",
+  "version": 2,
+  "active_profile_id": "default",
+  "global": {
     "start_minimized": false,
     "window_opacity": 95,
-    "device": "auto",
-    "typing_delay": 10,
-    "add_trailing_space": true,
-    "preserve_clipboard": true
+    "theme": "dark"
+  },
+  "profiles": [
+    {
+      "id": "default",
+      "name": "Default",
+      "settings": {
+        "model_size": "base",
+        "language": "auto",
+        "translate_to_english": false,
+        "hotkey": "caps_lock",
+        "hotkey_mode": "hold",
+        "injection_method": "clipboard",
+        "device": "auto",
+        "typing_delay": 10,
+        "add_trailing_space": true,
+        "preserve_clipboard": true,
+        "input_device": null,
+        "enable_sounds": false,
+        "enable_history": true,
+        "history_max_entries": 500,
+        "vocabulary_words": [],
+        "vocabulary_substitutions": {},
+        "copy_only": false
+      }
+    }
+  ]
 }
 ```
 
+Related local data:
+
+- Models: `~/.localvoice/models/`
+- History database: `~/.localvoice/history.db`
+- Logs: `~/.localvoice/logs/localvoice.log`
+
 ## Offline Operation
 
-For fully offline use, pre-download the model:
+To avoid runtime model downloads:
 
 ```bash
-# Download base model (recommended)
+# Recommended
 python download_models.py base
 
-# Download multiple models
+# Multiple
 python download_models.py tiny base small
 
-# Download all models
+# All
 python download_models.py all
 ```
 
-Models are stored in `~/.localvoice/models/`
-
 ## Troubleshooting
 
-### Hotkey not working
-- Ensure accessibility permissions are granted (macOS)
-- Check if another app is using the same hotkey
-- Try a different key combination
+Hotkey not working:
 
-### No audio recorded
-- Check microphone permissions
-- Verify correct microphone is selected in system settings
+- Verify Accessibility and Input Monitoring permissions (especially macOS)
+- Check for conflicts with other apps
+- Try a simpler combination (`Caps Lock`, `F10`)
 
-### Slow transcription
-- Use a smaller model (tiny or base)
-- Enable GPU acceleration if available
-- Close other resource-intensive applications
+No audio recorded:
+
+- Verify microphone permissions
+- Select the correct input device in Settings -> Audio
+- Confirm PortAudio is installed on the system
+- If logs show "Audio signal is near-silent", remove and re-add `localvoice.app` in
+  System Settings -> Privacy & Security -> Microphone, then restart the app
+
+Slow transcription:
+
+- Use a smaller model (`tiny` or `base`)
+- Use `cuda` device if available
+- Close other CPU/GPU heavy applications
 
 ## License
 

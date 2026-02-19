@@ -1,14 +1,14 @@
 """Main entry point for LocalVoice application."""
 
 import sys
-import json
-import threading
+import os
 import logging
 from pathlib import Path
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 from PySide6.QtWidgets import QApplication, QMessageBox
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QSettings, QTimer
+from PySide6.QtCore import QThread, Signal, QObject, QTimer
 
 log_dir = Path.home() / ".localvoice" / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
@@ -25,13 +25,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("LocalVoice starting up...")
 
+
+def _configure_ssl_certificates():
+    """Prefer certifi CA bundle in packaged runtimes that miss system certs."""
+    try:
+        import certifi
+    except Exception:
+        return
+    cert_path = certifi.where()
+    os.environ.setdefault("SSL_CERT_FILE", cert_path)
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", cert_path)
+
+
+_configure_ssl_certificates()
+
 from .gui.main_window import FloatingWindow, AppState
 from .gui.tray_icon import TrayIcon
 from .gui.settings_dialog import SettingsDialog
-from .audio.recorder import AudioRecorder, AudioConfig
+from .gui.themes import get_stylesheet
+from .audio.recorder import AudioRecorder
+from .audio.sounds import get_sound_manager
+from .history.manager import HistoryManager
+from .history.dialog import HistoryDialog
+from .vocabulary.manager import VocabularyManager
 from .transcription.engine import TranscriptionEngine, TranscriptionConfig, ModelSize
 from .injection.text_injector import TextInjector, InjectionConfig, InjectionMethod
 from .hotkey.manager import HotkeyManager, HotkeyConfig
+from .profiles.manager import ProfileManager
 
 
 class TranscriptionWorker(QObject):
@@ -74,53 +94,6 @@ class TranscriptionWorker(QObject):
         self._cancelled = True
 
 
-class SettingsManager:
-    def __init__(self):
-        self._settings_file = Path(__file__).parent.parent / "config" / "settings.json"
-        self._settings = self._get_default_settings()
-        self._load_from_file()
-    
-    def _get_default_settings(self) -> Dict[str, Any]:
-        return {
-            'model_size': 'base',
-            'language': 'auto',
-            'translate_to_english': False,
-            'hotkey': 'caps_lock',
-            'hotkey_mode': 'hold',
-            'injection_method': 'clipboard',
-            'start_minimized': False,
-            'window_opacity': 95,
-            'device': 'auto',
-            'typing_delay': 10,
-            'add_trailing_space': True,
-            'preserve_clipboard': True,
-            'input_device': None,
-        }
-    
-    def _load_from_file(self):
-        if self._settings_file.exists():
-            try:
-                with open(self._settings_file, 'r') as f:
-                    loaded = json.load(f)
-                    for key, value in loaded.items():
-                        if key in self._settings:
-                            self._settings[key] = value
-            except Exception as e:
-                print(f"Failed to load settings: {e}")
-    
-    def save_settings(self, settings: Dict[str, Any]):
-        self._settings.update(settings)
-        self._settings_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._settings_file, 'w') as f:
-            json.dump(self._settings, f, indent=4)
-    
-    def get_settings(self) -> Dict[str, Any]:
-        return self._settings.copy()
-    
-    def get(self, key: str, default=None):
-        return self._settings.get(key, default)
-
-
 class LocalVoiceApp(QObject):
     injection_complete = Signal()
     start_recording_requested = Signal()
@@ -130,12 +103,17 @@ class LocalVoiceApp(QObject):
     def __init__(self, app: QApplication):
         super().__init__()
         self._app = app
-        self._settings_manager = SettingsManager()
+        self._profile_manager = ProfileManager()
         
         self._recorder = AudioRecorder()
         self._engine = TranscriptionEngine()
         self._injector = TextInjector()
         self._hotkey_manager = HotkeyManager()
+        self._history_manager: Optional[HistoryManager] = None
+        self._history_dialog: Optional[HistoryDialog] = None
+        self._vocabulary_manager: Optional[VocabularyManager] = None
+        self._active_profile_id = "default"
+        self._active_profile_name = "Default"
         
         self._main_window: Optional[FloatingWindow] = None
         self._tray_icon: Optional[TrayIcon] = None
@@ -144,6 +122,7 @@ class LocalVoiceApp(QObject):
         
         self._is_recording = False
         self._is_processing = False
+        self._recording_start_time = None
         
         self._init_components()
         self._connect_signals()
@@ -154,19 +133,22 @@ class LocalVoiceApp(QObject):
         self._tray_icon = TrayIcon()
         self._tray_icon.show()
         
-        settings = self._settings_manager.get_settings()
-        if not settings.get('start_minimized', False):
+        global_settings = self._profile_manager.get_global_settings()
+        if not global_settings.get('start_minimized', False):
             self._main_window.show()
     
     def _connect_signals(self):
         self._main_window.recording_toggled.connect(self._on_recording_toggled)
         self._main_window.settings_requested.connect(self._show_settings)
+        self._main_window.history_requested.connect(self._show_history)
         self._main_window.quit_requested.connect(self._quit)
         
         self._tray_icon.recording_toggled.connect(self._on_tray_recording_toggled)
         self._tray_icon.show_window_requested.connect(self._main_window.show)
         self._tray_icon.hide_window_requested.connect(self._main_window.hide)
         self._tray_icon.settings_requested.connect(self._show_settings)
+        self._tray_icon.history_requested.connect(self._show_history)
+        self._tray_icon.profile_selected.connect(self._on_profile_selected)
         self._tray_icon.quit_requested.connect(self._quit)
         
         self._hotkey_manager.set_on_start(self._emit_start_recording)
@@ -190,13 +172,23 @@ class LocalVoiceApp(QObject):
         self.toggle_recording_requested.emit()
     
     def _load_settings(self):
-        settings = self._settings_manager.get_settings()
+        global_settings = self._profile_manager.get_global_settings()
+        active_profile = self._profile_manager.get_active_profile()
+        settings = active_profile["settings"]
+        self._active_profile_id = active_profile["id"]
+        self._active_profile_name = active_profile["name"]
+
+        theme = global_settings.get('theme', 'dark')
+        self._apply_theme(theme)
         
-        self._main_window.set_opacity(settings.get('window_opacity', 95) / 100.0)
+        self._main_window.set_opacity(global_settings.get('window_opacity', 95) / 100.0)
+        self._main_window.set_profile_name(self._active_profile_name)
         
         hotkey = settings.get('hotkey', 'caps_lock')
         hotkey_mode = settings.get('hotkey_mode', 'hold')
         hotkey_config = HotkeyConfig.parse(hotkey, hotkey_mode)
+        
+        self._main_window.set_hotkey_info(hotkey, hotkey_mode)
         
         if not self._hotkey_manager._running:
             self._hotkey_manager.update_config(hotkey_config)
@@ -215,6 +207,33 @@ class LocalVoiceApp(QObject):
         input_device = settings.get('input_device', None)
         if input_device is not None:
             self._recorder.set_input_device(input_device)
+        
+        sound_manager = get_sound_manager()
+        sound_manager.enabled = settings.get('enable_sounds', False)
+
+        if self._history_manager is None:
+            self._history_manager = HistoryManager(
+                max_entries=settings.get('history_max_entries', 500)
+            )
+        else:
+            self._history_manager.max_entries = settings.get('history_max_entries', 500)
+        self._history_manager.enabled = settings.get('enable_history', True)
+
+        if self._vocabulary_manager is None:
+            self._vocabulary_manager = VocabularyManager()
+        words = settings.get('vocabulary_words', [])
+        substitutions = settings.get('vocabulary_substitutions', {})
+        self._vocabulary_manager.set_words(words)
+        self._vocabulary_manager.set_substitutions(substitutions)
+        self._engine.set_vocabulary_manager(self._vocabulary_manager)
+
+        tray_profiles = [
+            (profile["id"], profile["name"]) for profile in self._profile_manager.get_profiles()
+        ]
+        self._tray_icon.set_profiles(tray_profiles, self._active_profile_id)
+
+        if self._history_dialog:
+            self._history_dialog.set_active_profile(self._active_profile_id, self._active_profile_name)
     
     def _on_recording_toggled(self, start: bool):
         if start:
@@ -236,8 +255,10 @@ class LocalVoiceApp(QObject):
         logger.info("Starting recording...")
         if self._recorder.start_recording():
             self._is_recording = True
+            self._recording_start_time = datetime.now()
             self._main_window.set_state(AppState.RECORDING)
             self._tray_icon.set_state("recording")
+            get_sound_manager().play_start_sound()
             logger.info("Recording started successfully")
         else:
             logger.error("Failed to start recording")
@@ -248,6 +269,7 @@ class LocalVoiceApp(QObject):
             return
         
         logger.info("Stopping recording...")
+        get_sound_manager().play_stop_sound()
         audio_data = self._recorder.stop_recording()
         self._is_recording = False
         
@@ -256,6 +278,7 @@ class LocalVoiceApp(QObject):
             self._start_transcription(audio_data)
         else:
             logger.warning("No audio data recorded")
+            self._recording_start_time = None
             self._main_window.set_state(AppState.IDLE)
             self._tray_icon.set_state("idle")
     
@@ -280,7 +303,7 @@ class LocalVoiceApp(QObject):
                     old_thread.wait()
             old_thread.deleteLater()
         
-        settings = self._settings_manager.get_settings()
+        settings = self._profile_manager.get_active_profile_settings()
         language = settings.get('language', 'auto')
         if language == 'auto':
             language = None
@@ -296,17 +319,17 @@ class LocalVoiceApp(QObject):
             device=device
         )
         
-        if not self._engine.is_model_loaded:
-            if not self._engine.load_model(transcription_config):
-                self._is_processing = False
-                self._main_window.set_state(AppState.ERROR)
-                self._tray_icon.set_state("error")
-                QMessageBox.warning(
-                    self._main_window,
-                    "Transcription Error",
-                    "Failed to load model"
-                )
-                return
+        if not self._engine.load_model(transcription_config):
+            self._is_processing = False
+            self._recording_start_time = None
+            self._main_window.set_state(AppState.ERROR)
+            self._tray_icon.set_state("error")
+            QMessageBox.warning(
+                self._main_window,
+                "Transcription Error",
+                "Failed to load model"
+            )
+            return
         
         self._transcription_thread = QThread()
         self._transcription_worker = TranscriptionWorker(
@@ -323,9 +346,11 @@ class LocalVoiceApp(QObject):
     def _on_worker_finished(self):
         worker = self._transcription_worker
         thread = self._transcription_thread
+        recording_start_time = self._recording_start_time
         self._transcription_worker = None
         self._transcription_thread = None
         self._is_processing = False
+        self._recording_start_time = None
         
         if not worker:
             logger.warning("Worker is None in _on_worker_finished")
@@ -345,8 +370,28 @@ class LocalVoiceApp(QObject):
             text = worker.get_result()
             logger.info(f"Transcription result: {text[:100] if text else 'empty'}...")
             if text.strip():
-                logger.info("Starting text injection...")
-                self._injector.inject_async(text)
+                duration = None
+                if recording_start_time:
+                    duration = (datetime.now() - recording_start_time).total_seconds()
+                
+                if self._history_manager:
+                    settings = self._profile_manager.get_active_profile_settings()
+                    language = settings.get('language', 'auto')
+                    if language == 'auto':
+                        language = None
+                    self._history_manager.add_entry(text, self._active_profile_id, language, duration)
+                
+                settings = self._profile_manager.get_active_profile_settings()
+                if settings.get('copy_only', False):
+                    logger.info("Copy-only mode: copying to clipboard")
+                    import pyperclip
+                    pyperclip.copy(text)
+                    self._tray_icon.show_message("LocalVoice", "Copied to clipboard")
+                    self._main_window.set_state(AppState.IDLE)
+                    self._tray_icon.set_state("idle")
+                else:
+                    logger.info("Starting text injection...")
+                    self._injector.inject_async(text)
             else:
                 logger.warning("Transcription returned empty text")
                 self._main_window.set_state(AppState.IDLE)
@@ -368,14 +413,44 @@ class LocalVoiceApp(QObject):
         self._tray_icon.set_state("idle")
     
     def _show_settings(self):
-        current_settings = self._settings_manager.get_settings()
+        current_settings = self._profile_manager.get_state()
         dialog = SettingsDialog(current_settings, self._main_window)
         dialog.settings_changed.connect(self._on_settings_changed)
         dialog.exec()
     
     def _on_settings_changed(self, settings: Dict[str, Any]):
-        self._settings_manager.save_settings(settings)
+        self._profile_manager.save_state(settings)
         self._load_settings()
+
+    def _on_profile_selected(self, profile_id: str):
+        if self._is_recording or self._is_processing:
+            self._tray_icon.show_message("LocalVoice", "Cannot switch profile while recording or processing")
+            return
+        if profile_id == self._active_profile_id:
+            return
+        if not self._profile_manager.set_active_profile(profile_id):
+            self._tray_icon.show_message("LocalVoice", "Failed to switch profile")
+            return
+        self._load_settings()
+    
+    def _show_history(self):
+        if not self._history_manager or not self._history_manager.enabled:
+            QMessageBox.information(
+                self._main_window,
+                "History Disabled",
+                "History is currently disabled. Enable it in Settings to use this feature."
+            )
+            return
+        
+        if self._history_dialog is None:
+            self._history_dialog = HistoryDialog(self._history_manager, self._main_window)
+            self._history_dialog.set_active_profile(self._active_profile_id, self._active_profile_name)
+        else:
+            self._history_dialog.set_active_profile(self._active_profile_id, self._active_profile_name)
+        
+        self._history_dialog.show()
+        self._history_dialog.raise_()
+        self._history_dialog.activateWindow()
     
     def _quit(self):
         self._is_recording = False
@@ -394,6 +469,16 @@ class LocalVoiceApp(QObject):
         self._main_window.close()
         
         QTimer.singleShot(100, self._app.quit)
+    
+    def _apply_theme(self, theme_name: str):
+        stylesheet = get_stylesheet(theme_name)
+        self._app.setStyleSheet(stylesheet)
+        
+        self._main_window.set_theme(theme_name)
+        self._tray_icon.set_theme(theme_name)
+        
+        if self._history_dialog:
+            self._history_dialog.setStyleSheet(stylesheet)
 
 
 def main():

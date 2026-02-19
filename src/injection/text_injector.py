@@ -56,7 +56,7 @@ class TextInjector:
             time.sleep(0.05)
             pyperclip.copy(self._clipboard_backup)
         except Exception as e:
-            print(f"Failed to restore clipboard: {e}")
+            logger.warning(f"Failed to restore clipboard: {e}")
         finally:
             self._clipboard_backup = None
     
@@ -80,7 +80,6 @@ class TextInjector:
             
         except Exception as e:
             logger.error(f"Clipboard injection failed: {e}")
-            print(f"Clipboard injection failed: {e}")
             return False
     
     def inject_keyboard(self, text: str) -> bool:
@@ -104,7 +103,6 @@ class TextInjector:
             
         except Exception as e:
             logger.error(f"Keyboard injection failed: {e}")
-            print(f"Keyboard injection failed: {e}")
             return False
     
     def inject(self, text: str) -> bool:
@@ -115,16 +113,10 @@ class TextInjector:
             text += ' '
         
         if self.config.method == InjectionMethod.CLIPBOARD:
-            success = self.inject_clipboard(text)
-            if not success:
-                success = self.inject_keyboard(text)
-            return success
+            return self.inject_clipboard(text)
         
         elif self.config.method == InjectionMethod.KEYBOARD:
-            success = self.inject_keyboard(text)
-            if not success:
-                success = self.inject_clipboard(text)
-            return success
+            return self.inject_keyboard(text)
         
         elif self.config.method == InjectionMethod.CLIPBOARD_KEYBOARD_FALLBACK:
             success = self.inject_clipboard(text)

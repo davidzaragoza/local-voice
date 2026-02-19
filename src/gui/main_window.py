@@ -2,13 +2,16 @@
 
 from enum import Enum
 from typing import Optional, Callable
+from datetime import datetime
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QFrame, QMenu, QSizePolicy
 )
-from PySide6.QtCore import Qt, QTimer, QSize, Signal, QPropertyAnimation, QEasingCurve, QPoint
+from PySide6.QtCore import Qt, QTimer, QSize, Signal, QPropertyAnimation, QEasingCurve, QPoint, QRect
 from PySide6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QCursor, QIcon, QAction
+
+from .themes import get_theme, get_menu_stylesheet
 
 
 class AppState(Enum):
@@ -29,10 +32,16 @@ class MicButton(QPushButton):
         self._rotation_angle = 0
         self._rotation_timer = QTimer(self)
         self._rotation_timer.timeout.connect(self._animate_rotation)
+        self._theme = "dark"
         
-        self.setFixedSize(80, 80)
+        self.setMinimumSize(40, 40)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setFlat(True)
+    
+    def set_theme(self, theme_name: str):
+        self._theme = theme_name
+        self.update()
     
     @property
     def state(self) -> AppState:
@@ -73,31 +82,34 @@ class MicButton(QPushButton):
         center = rect.center()
         radius = min(rect.width(), rect.height()) // 2 - 5
         
+        theme = get_theme(self._theme)
+        
         if self._state == AppState.IDLE:
-            bg_color = QColor(60, 60, 60)
-            border_color = QColor(100, 100, 100)
-            icon_color = QColor(200, 200, 200)
+            bg_color = QColor(theme['mic_idle_bg'])
+            border_color = QColor(theme['mic_idle_border'])
+            icon_color = QColor(theme['mic_idle_icon'])
         elif self._state == AppState.RECORDING:
             pulse_factor = self._pulse_value / 100.0
+            base_bg = QColor(theme['mic_recording_bg'])
             bg_color = QColor(
-                int(60 + 140 * pulse_factor),
-                int(60 - 30 * pulse_factor),
-                int(60 - 30 * pulse_factor)
+                int(base_bg.red() * (0.5 + 0.5 * pulse_factor)),
+                int(base_bg.green() * pulse_factor),
+                int(base_bg.blue() * pulse_factor)
             )
-            border_color = QColor(200, 60, 60)
-            icon_color = QColor(255, 100, 100)
+            border_color = QColor(theme['mic_recording_border'])
+            icon_color = QColor(theme['mic_recording_icon'])
         elif self._state == AppState.PROCESSING:
-            bg_color = QColor(50, 80, 120)
-            border_color = QColor(80, 130, 200)
-            icon_color = QColor(150, 200, 255)
+            bg_color = QColor(theme['mic_processing_bg'])
+            border_color = QColor(theme['mic_processing_border'])
+            icon_color = QColor(theme['mic_processing_icon'])
         elif self._state == AppState.ERROR:
-            bg_color = QColor(80, 40, 40)
-            border_color = QColor(200, 80, 80)
-            icon_color = QColor(255, 100, 100)
+            bg_color = QColor(theme['mic_error_bg'])
+            border_color = QColor(theme['mic_error_border'])
+            icon_color = QColor(theme['mic_error_icon'])
         else:
-            bg_color = QColor(60, 60, 60)
-            border_color = QColor(100, 100, 100)
-            icon_color = QColor(200, 200, 200)
+            bg_color = QColor(theme['mic_idle_bg'])
+            border_color = QColor(theme['mic_idle_border'])
+            icon_color = QColor(theme['mic_idle_icon'])
         
         painter.setPen(QPen(border_color, 3))
         painter.setBrush(QBrush(bg_color))
@@ -162,6 +174,7 @@ class MicButton(QPushButton):
 class FloatingWindow(QWidget):
     recording_toggled = Signal(bool)
     settings_requested = Signal()
+    history_requested = Signal()
     quit_requested = Signal()
     _state_change_requested = Signal(object)
     
@@ -170,6 +183,13 @@ class FloatingWindow(QWidget):
         self._state = AppState.IDLE
         self._drag_pos = None
         self._opacity = 0.95
+        self._recording_start_time: Optional[datetime] = None
+        self._duration_timer = QTimer(self)
+        self._duration_timer.timeout.connect(self._update_duration_display)
+        self._hotkey = "Caps Lock"
+        self._hotkey_mode = "hold"
+        self._profile_name = "Default"
+        self._theme = "dark"
         
         self._state_change_requested.connect(self._do_set_state)
         
@@ -183,20 +203,28 @@ class FloatingWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
-        self.setFixedSize(100, 100)
+        self.setFixedSize(100, 125)
         self.setWindowOpacity(self._opacity)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(0)
+        layout.setContentsMargins(10, 5, 10, 10)
+        layout.setSpacing(5)
         
         self.mic_button = MicButton(self)
         self.mic_button.clicked.connect(self._on_mic_clicked)
         self.mic_button.installEventFilter(self)
         layout.addWidget(self.mic_button, alignment=Qt.AlignmentFlag.AlignCenter)
         
+        self._duration_label = QLabel("00:00", self)
+        self._duration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._duration_label.hide()
+        layout.addWidget(self._duration_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        
+        self._update_duration_label_style()
+        self._update_tooltip()
     
     def _on_mic_clicked(self):
         if self._state == AppState.IDLE:
@@ -214,6 +242,31 @@ class FloatingWindow(QWidget):
     def _do_set_state(self, state: AppState):
         self._state = state
         self.mic_button.state = state
+        self._update_tooltip()
+        
+        if state == AppState.RECORDING:
+            self._recording_start_time = datetime.now()
+            self._duration_label.setText("00:00")
+            self._duration_label.show()
+            self._duration_timer.start(1000)
+        else:
+            self._duration_timer.stop()
+            self._duration_label.hide()
+            self._recording_start_time = None
+    
+    def _update_duration_display(self):
+        if self._recording_start_time is None:
+            return
+        
+        elapsed = datetime.now() - self._recording_start_time
+        total_seconds = int(elapsed.total_seconds())
+        minutes, seconds = divmod(total_seconds, 60)
+        
+        if total_seconds >= 3600:
+            hours, minutes = divmod(minutes, 60)
+            self._duration_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        else:
+            self._duration_label.setText(f"{minutes:02d}:{seconds:02d}")
     
     def get_state(self) -> AppState:
         return self._state
@@ -222,27 +275,63 @@ class FloatingWindow(QWidget):
         self._opacity = max(0.3, min(1.0, opacity))
         self.setWindowOpacity(self._opacity)
     
+    def set_theme(self, theme_name: str):
+        self._theme = theme_name
+        self.mic_button.set_theme(theme_name)
+        self._update_duration_label_style()
+        self._update_tooltip()
+    
+    def _update_duration_label_style(self):
+        theme = get_theme(self._theme)
+        self._duration_label.setStyleSheet(f"""
+            QLabel {{
+                color: {theme['mic_recording_icon']};
+                font-size: 12px;
+                font-weight: bold;
+                background-color: transparent;
+            }}
+        """)
+    
+    def set_hotkey_info(self, hotkey: str, mode: str):
+        self._hotkey = self._format_hotkey(hotkey)
+        self._hotkey_mode = mode
+        self._update_tooltip()
+
+    def set_profile_name(self, profile_name: str):
+        self._profile_name = profile_name
+        self._update_tooltip()
+    
+    def _format_hotkey(self, hotkey: str) -> str:
+        return hotkey.replace('_', ' ').replace('+', '+').title()
+    
+    def _update_tooltip(self):
+        mode_text = "Hold" if self._hotkey_mode == "hold" else "Toggle"
+        state_text = self._state.value.capitalize()
+        tooltip = f"LocalVoice - {state_text} [{self._hotkey} - {mode_text}] | Profile: {self._profile_name}"
+        
+        theme = get_theme(self._theme)
+        self.setStyleSheet(f"""
+            QToolTip {{
+                color: {theme['text']};
+                background-color: {theme['window_bg']};
+                border: 1px solid {theme['border']};
+                padding: 4px;
+            }}
+        """)
+        self.setToolTip(tooltip)
+        self.mic_button.setToolTip(tooltip)
+    
     def _show_context_menu(self, pos):
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2d2d2d;
-                color: #ffffff;
-                border: 1px solid #444444;
-                padding: 5px;
-            }
-            QMenu::item {
-                padding: 5px 20px;
-                border-radius: 3px;
-            }
-            QMenu::item:selected {
-                background-color: #444444;
-            }
-        """)
+        menu.setStyleSheet(get_menu_stylesheet(self._theme))
         
         settings_action = QAction("Settings", self)
         settings_action.triggered.connect(self.settings_requested.emit)
         menu.addAction(settings_action)
+        
+        history_action = QAction("History", self)
+        history_action.triggered.connect(self.history_requested.emit)
+        menu.addAction(history_action)
         
         menu.addSeparator()
         

@@ -1,17 +1,17 @@
 """Settings dialog for LocalVoice configuration."""
 
-import json
-from pathlib import Path
+from copy import deepcopy
 from typing import Optional, Dict, Any, Set, List
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QComboBox, QLabel, QPushButton, QCheckBox, QSlider,
     QGroupBox, QFormLayout, QSpinBox, QDialogButtonBox,
-    QRadioButton, QButtonGroup, QLineEdit
+    QRadioButton, QButtonGroup, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QInputDialog
 )
-from PySide6.QtCore import Qt, Signal, QEvent, QTimer
-from PySide6.QtGui import QKeyEvent, QKeySequence
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QKeyEvent
 
 import sounddevice as sd
 
@@ -222,11 +222,13 @@ class SettingsDialog(QDialog):
     
     def __init__(self, current_settings: Optional[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
-        self._settings = current_settings or self._get_default_settings()
+        self._state = self._normalize_state(current_settings or self._default_state())
+        self._active_profile_id = self._state.get('active_profile_id', 'default')
+        self._is_switching_profile = False
         self._init_ui()
-        self._load_settings()
+        self._load_state_into_ui()
     
-    def _get_default_settings(self) -> Dict[str, Any]:
+    def _default_profile_settings(self) -> Dict[str, Any]:
         return {
             'model_size': 'base',
             'language': 'auto',
@@ -234,20 +236,121 @@ class SettingsDialog(QDialog):
             'hotkey': 'caps_lock',
             'hotkey_mode': 'hold',
             'injection_method': 'clipboard',
-            'start_minimized': False,
-            'window_opacity': 95,
+            'device': 'auto',
             'typing_delay': 10,
             'add_trailing_space': True,
             'preserve_clipboard': True,
             'input_device': None,
+            'enable_sounds': False,
+            'enable_history': True,
+            'history_max_entries': 500,
+            'vocabulary_words': [],
+            'vocabulary_substitutions': {},
+            'copy_only': False,
         }
+
+    def _default_global_settings(self) -> Dict[str, Any]:
+        return {
+            'start_minimized': False,
+            'window_opacity': 95,
+            'theme': 'dark',
+        }
+
+    def _default_state(self) -> Dict[str, Any]:
+        return {
+            'version': 2,
+            'active_profile_id': 'default',
+            'global': self._default_global_settings(),
+            'profiles': [
+                {
+                    'id': 'default',
+                    'name': 'Default',
+                    'settings': self._default_profile_settings(),
+                }
+            ],
+        }
+
+    def _normalize_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        if 'profiles' not in state or 'global' not in state:
+            global_settings = self._default_global_settings()
+            profile_settings = self._default_profile_settings()
+            for key, value in state.items():
+                if key in global_settings:
+                    global_settings[key] = value
+                elif key in profile_settings:
+                    profile_settings[key] = value
+            return {
+                'version': 2,
+                'active_profile_id': 'default',
+                'global': global_settings,
+                'profiles': [
+                    {'id': 'default', 'name': 'Default', 'settings': profile_settings}
+                ],
+            }
+
+        normalized = self._default_state()
+        loaded_global = state.get('global', {})
+        if isinstance(loaded_global, dict):
+            for key in normalized['global']:
+                if key in loaded_global:
+                    normalized['global'][key] = loaded_global[key]
+
+        profiles = []
+        loaded_profiles = state.get('profiles', [])
+        if isinstance(loaded_profiles, list):
+            for idx, profile in enumerate(loaded_profiles):
+                if not isinstance(profile, dict):
+                    continue
+                profile_id = str(profile.get('id') or f"profile_{idx + 1}").strip()
+                profile_name = str(profile.get('name') or f"Profile {idx + 1}").strip()
+                profile_settings = self._default_profile_settings()
+                raw_settings = profile.get('settings', {})
+                if isinstance(raw_settings, dict):
+                    for key in profile_settings:
+                        if key in raw_settings:
+                            profile_settings[key] = raw_settings[key]
+                profiles.append({'id': profile_id, 'name': profile_name, 'settings': profile_settings})
+
+        if not profiles:
+            profiles = normalized['profiles']
+        normalized['profiles'] = profiles
+
+        active_profile_id = str(state.get('active_profile_id') or '').strip()
+        if not any(p['id'] == active_profile_id for p in profiles):
+            active_profile_id = profiles[0]['id']
+        normalized['active_profile_id'] = active_profile_id
+        return normalized
     
     def _init_ui(self):
         self.setWindowTitle("LocalVoice Settings")
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(620)
+        self.resize(680, 720)
         self.setModal(True)
         
         layout = QVBoxLayout(self)
+
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Profile:"))
+        self.profile_combo = QComboBox()
+        self.profile_combo.currentIndexChanged.connect(self._on_profile_selection_changed)
+        profile_row.addWidget(self.profile_combo, 1)
+
+        self.new_profile_btn = QPushButton("New")
+        self.new_profile_btn.setFixedWidth(96)
+        self.new_profile_btn.clicked.connect(self._create_profile)
+        profile_row.addWidget(self.new_profile_btn)
+
+        self.rename_profile_btn = QPushButton("Rename")
+        self.rename_profile_btn.setFixedWidth(96)
+        self.rename_profile_btn.clicked.connect(self._rename_profile)
+        profile_row.addWidget(self.rename_profile_btn)
+
+        self.delete_profile_btn = QPushButton("Delete")
+        self.delete_profile_btn.setFixedWidth(96)
+        self.delete_profile_btn.clicked.connect(self._delete_profile)
+        profile_row.addWidget(self.delete_profile_btn)
+
+        layout.addLayout(profile_row)
         
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
@@ -257,6 +360,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._create_model_tab(), "Model")
         self.tabs.addTab(self._create_hotkey_tab(), "Hotkey")
         self.tabs.addTab(self._create_injection_tab(), "Injection")
+        self.tabs.addTab(self._create_vocabulary_tab(), "Vocabulary")
         
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
@@ -310,6 +414,37 @@ class SettingsDialog(QDialog):
         opacity_layout.addWidget(self.opacity_slider)
         layout.addWidget(opacity_group)
         
+        history_group = QGroupBox("History")
+        history_layout = QVBoxLayout(history_group)
+        
+        self.enable_history = QCheckBox("Enable transcription history")
+        self.enable_history.setChecked(True)
+        history_layout.addWidget(self.enable_history)
+        
+        max_entries_layout = QHBoxLayout()
+        max_entries_layout.addWidget(QLabel("Max entries:"))
+        self.history_max_entries = QSpinBox()
+        self.history_max_entries.setRange(50, 5000)
+        self.history_max_entries.setValue(500)
+        self.history_max_entries.setSingleStep(100)
+        max_entries_layout.addWidget(self.history_max_entries)
+        max_entries_layout.addStretch()
+        history_layout.addLayout(max_entries_layout)
+        
+        layout.addWidget(history_group)
+        
+        theme_group = QGroupBox("Appearance")
+        theme_layout = QVBoxLayout(theme_group)
+        
+        theme_form = QFormLayout()
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.addItem("Light", "light")
+        theme_form.addRow("Theme:", self.theme_combo)
+        theme_layout.addLayout(theme_form)
+        
+        layout.addWidget(theme_group)
+        
         layout.addStretch()
         return widget
     
@@ -335,6 +470,19 @@ class SettingsDialog(QDialog):
         input_layout.addWidget(refresh_btn)
         
         layout.addWidget(input_group)
+        
+        sounds_group = QGroupBox("Audio Feedback")
+        sounds_layout = QVBoxLayout(sounds_group)
+        
+        self.enable_sounds = QCheckBox("Enable audio feedback sounds")
+        self.enable_sounds.setToolTip("Play a sound when recording starts and stops")
+        sounds_layout.addWidget(self.enable_sounds)
+        
+        sounds_info = QLabel("Provides audio confirmation of recording state\nwhen the floating window is not visible.")
+        sounds_info.setStyleSheet("color: #888; font-size: 11px;")
+        sounds_layout.addWidget(sounds_info)
+        
+        layout.addWidget(sounds_group)
         
         layout.addStretch()
         return widget
@@ -465,6 +613,10 @@ class SettingsDialog(QDialog):
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout(options_group)
         
+        self.copy_only = QCheckBox("Copy to clipboard only (no auto-paste)")
+        self.copy_only.setToolTip("When enabled, transcribed text is copied to clipboard without automatic pasting")
+        options_layout.addWidget(self.copy_only)
+        
         self.add_trailing_space = QCheckBox("Add trailing space after text")
         self.add_trailing_space.setChecked(True)
         options_layout.addWidget(self.add_trailing_space)
@@ -489,29 +641,177 @@ class SettingsDialog(QDialog):
     def _update_opacity_label(self, value: int):
         self.opacity_label.setText(f"{value}%")
     
-    def _load_settings(self):
-        settings = self._settings
+    def _create_vocabulary_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
         
+        words_group = QGroupBox("Custom Words")
+        words_layout = QVBoxLayout(words_group)
+        
+        words_info = QLabel("Add names, technical terms, or domain-specific words to improve transcription accuracy.")
+        words_info.setStyleSheet("color: #888; font-size: 11px;")
+        words_info.setWordWrap(True)
+        words_layout.addWidget(words_info)
+        
+        self._words_list = QListWidget()
+        self._words_list.setMaximumHeight(150)
+        words_layout.addWidget(self._words_list)
+        
+        add_word_layout = QHBoxLayout()
+        self._new_word_input = QLineEdit()
+        self._new_word_input.setPlaceholderText("Enter a word or phrase")
+        add_word_layout.addWidget(self._new_word_input)
+        
+        add_word_btn = QPushButton("Add")
+        add_word_btn.setFixedWidth(60)
+        add_word_btn.clicked.connect(self._add_vocabulary_word)
+        add_word_layout.addWidget(add_word_btn)
+        
+        remove_word_btn = QPushButton("Remove")
+        remove_word_btn.setFixedWidth(70)
+        remove_word_btn.clicked.connect(self._remove_vocabulary_word)
+        add_word_layout.addWidget(remove_word_btn)
+        
+        words_layout.addLayout(add_word_layout)
+        
+        self._words_count_label = QLabel("0 / 50 words")
+        self._words_count_label.setStyleSheet("color: #888; font-size: 11px;")
+        words_layout.addWidget(self._words_count_label)
+        
+        layout.addWidget(words_group)
+        
+        subs_group = QGroupBox("Substitutions (Optional)")
+        subs_layout = QVBoxLayout(subs_group)
+        
+        subs_info = QLabel("Define text replacements to fix common transcription errors automatically.")
+        subs_info.setStyleSheet("color: #888; font-size: 11px;")
+        subs_info.setWordWrap(True)
+        subs_layout.addWidget(subs_info)
+        
+        self._subs_list = QListWidget()
+        self._subs_list.setMaximumHeight(120)
+        subs_layout.addWidget(self._subs_list)
+        
+        add_sub_layout = QHBoxLayout()
+        
+        self._sub_from_input = QLineEdit()
+        self._sub_from_input.setPlaceholderText("From")
+        add_sub_layout.addWidget(self._sub_from_input)
+        
+        arrow_label = QLabel("→")
+        add_sub_layout.addWidget(arrow_label)
+        
+        self._sub_to_input = QLineEdit()
+        self._sub_to_input.setPlaceholderText("To")
+        add_sub_layout.addWidget(self._sub_to_input)
+        
+        add_sub_btn = QPushButton("Add")
+        add_sub_btn.setFixedWidth(60)
+        add_sub_btn.clicked.connect(self._add_substitution)
+        add_sub_layout.addWidget(add_sub_btn)
+        
+        remove_sub_btn = QPushButton("Remove")
+        remove_sub_btn.setFixedWidth(70)
+        remove_sub_btn.clicked.connect(self._remove_substitution)
+        add_sub_layout.addWidget(remove_sub_btn)
+        
+        subs_layout.addLayout(add_sub_layout)
+        layout.addWidget(subs_group)
+        
+        layout.addStretch()
+        return widget
+    
+    def _add_vocabulary_word(self):
+        word = self._new_word_input.text().strip()
+        if word:
+            if self._words_list.count() >= 50:
+                return
+            for i in range(self._words_list.count()):
+                if self._words_list.item(i).text().lower() == word.lower():
+                    return
+            self._words_list.addItem(word)
+            self._new_word_input.clear()
+            self._update_words_count()
+    
+    def _remove_vocabulary_word(self):
+        current = self._words_list.currentItem()
+        if current:
+            self._words_list.takeItem(self._words_list.row(current))
+            self._update_words_count()
+    
+    def _update_words_count(self):
+        self._words_count_label.setText(f"{self._words_list.count()} / 50 words")
+    
+    def _add_substitution(self):
+        from_text = self._sub_from_input.text().strip()
+        to_text = self._sub_to_input.text().strip()
+        if from_text and to_text:
+            for i in range(self._subs_list.count()):
+                item = self._subs_list.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == from_text:
+                    self._subs_list.takeItem(i)
+                    break
+            item = QListWidgetItem(f'"{from_text}" → "{to_text}"')
+            item.setData(Qt.ItemDataRole.UserRole, from_text)
+            item.setData(Qt.ItemDataRole.UserRole + 1, to_text)
+            self._subs_list.addItem(item)
+            self._sub_from_input.clear()
+            self._sub_to_input.clear()
+    
+    def _remove_substitution(self):
+        current = self._subs_list.currentItem()
+        if current:
+            self._subs_list.takeItem(self._subs_list.row(current))
+    
+    def _load_state_into_ui(self):
+        self._refresh_profile_combo()
+        self._load_global_settings()
+        self._load_profile_settings(self._active_profile_id)
+
+    def _load_global_settings(self):
+        global_settings = self._state.get('global', {})
+        self.start_minimized.setChecked(global_settings.get('start_minimized', False))
+        self.opacity_slider.setValue(int(global_settings.get('window_opacity', 95)))
+
+        theme = global_settings.get('theme', 'dark')
+        for i in range(self.theme_combo.count()):
+            if self.theme_combo.itemData(i) == theme:
+                self.theme_combo.setCurrentIndex(i)
+                break
+
+    def _get_profile_by_id(self, profile_id: str) -> Optional[Dict[str, Any]]:
+        for profile in self._state.get('profiles', []):
+            if profile.get('id') == profile_id:
+                return profile
+        return None
+
+    def _load_profile_settings(self, profile_id: str):
+        profile = self._get_profile_by_id(profile_id)
+        if not profile:
+            return
+        settings = profile['settings']
+
+        self._is_switching_profile = True
         self.model_combo.setCurrentIndex(
             next((i for i, (v, _) in enumerate(self.MODEL_SIZES) if v == settings.get('model_size', 'base')), 1)
         )
-        
+
         language = settings.get('language', 'auto')
         language_name = self.LANGUAGE_MAP.get(language, 'Auto Detect')
         for i in range(self.language_combo.count()):
             if self.language_combo.itemText(i) == language_name:
                 self.language_combo.setCurrentIndex(i)
                 break
-        
+
         hotkey = settings.get('hotkey', 'caps_lock')
         mode = settings.get('hotkey_mode', 'hold')
         self.hotkey_recorder.set_hotkey(hotkey)
-        
+
         if mode == 'hold':
             self.mode_hold.setChecked(True)
         else:
             self.mode_toggle.setChecked(True)
-        
+
         injection_method = settings.get('injection_method', 'clipboard')
         for i, (value, _) in enumerate(self.INJECTION_METHODS):
             if value == injection_method:
@@ -519,14 +819,12 @@ class SettingsDialog(QDialog):
                 if btn:
                     btn.setChecked(True)
                     break
-        
-        self.start_minimized.setChecked(settings.get('start_minimized', False))
+
         self.translate_to_english.setChecked(settings.get('translate_to_english', False))
         self.add_trailing_space.setChecked(settings.get('add_trailing_space', True))
         self.preserve_clipboard.setChecked(settings.get('preserve_clipboard', True))
         self.typing_delay.setValue(settings.get('typing_delay', 10))
-        self.opacity_slider.setValue(int(settings.get('window_opacity', 95)))
-        
+
         device = settings.get('device', 'auto')
         if device == 'auto':
             self.device_auto.setChecked(True)
@@ -534,14 +832,42 @@ class SettingsDialog(QDialog):
             self.device_cpu.setChecked(True)
         else:
             self.device_gpu.setChecked(True)
-        
+
         input_device = settings.get('input_device', None)
+        input_found = False
         for i in range(self.input_device_combo.count()):
             if self.input_device_combo.itemData(i) == input_device:
                 self.input_device_combo.setCurrentIndex(i)
+                input_found = True
                 break
-    
-    def get_settings(self) -> Dict[str, Any]:
+        if not input_found:
+            self.input_device_combo.setCurrentIndex(0)
+
+        self.enable_sounds.setChecked(settings.get('enable_sounds', False))
+        self.enable_history.setChecked(settings.get('enable_history', True))
+        self.history_max_entries.setValue(settings.get('history_max_entries', 500))
+        self.copy_only.setChecked(settings.get('copy_only', False))
+
+        self._load_vocabulary(settings)
+        self._is_switching_profile = False
+
+    def _load_vocabulary(self, settings: Dict[str, Any]):
+        self._words_list.clear()
+        self._subs_list.clear()
+        
+        words = settings.get('vocabulary_words', [])
+        for word in words:
+            self._words_list.addItem(word)
+        self._update_words_count()
+        
+        substitutions = settings.get('vocabulary_substitutions', {})
+        for source, target in substitutions.items():
+            item = QListWidgetItem(f'"{source}" → "{target}"')
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            item.setData(Qt.ItemDataRole.UserRole + 1, target)
+            self._subs_list.addItem(item)
+
+    def _collect_profile_settings_from_ui(self) -> Dict[str, Any]:
         language_code_to_name = self.LANGUAGE_MAP
         language_name_to_code = {v: k for k, v in language_code_to_name.items()}
         
@@ -565,18 +891,169 @@ class SettingsDialog(QDialog):
             'hotkey': self.hotkey_recorder.get_hotkey(),
             'hotkey_mode': 'hold' if self.mode_hold.isChecked() else 'toggle',
             'injection_method': injection_method,
-            'start_minimized': self.start_minimized.isChecked(),
-            'window_opacity': self.opacity_slider.value(),
             'device': device,
             'typing_delay': self.typing_delay.value(),
             'add_trailing_space': self.add_trailing_space.isChecked(),
             'preserve_clipboard': self.preserve_clipboard.isChecked(),
             'input_device': self.input_device_combo.currentData(),
+            'enable_sounds': self.enable_sounds.isChecked(),
+            'enable_history': self.enable_history.isChecked(),
+            'history_max_entries': self.history_max_entries.value(),
+            'vocabulary_words': self._get_vocabulary_words(),
+            'vocabulary_substitutions': self._get_vocabulary_substitutions(),
+            'copy_only': self.copy_only.isChecked(),
+        }
+
+    def _collect_global_settings_from_ui(self) -> Dict[str, Any]:
+        return {
+            'start_minimized': self.start_minimized.isChecked(),
+            'window_opacity': self.opacity_slider.value(),
+            'theme': self.theme_combo.currentData(),
+        }
+
+    def _refresh_profile_combo(self):
+        self._is_switching_profile = True
+        self.profile_combo.clear()
+        for profile in self._state.get('profiles', []):
+            self.profile_combo.addItem(profile['name'], profile['id'])
+
+        for i in range(self.profile_combo.count()):
+            if self.profile_combo.itemData(i) == self._active_profile_id:
+                self.profile_combo.setCurrentIndex(i)
+                break
+
+        self.delete_profile_btn.setEnabled(len(self._state.get('profiles', [])) > 1)
+        self._is_switching_profile = False
+
+    def _save_active_profile_from_ui(self):
+        profile = self._get_profile_by_id(self._active_profile_id)
+        if not profile:
+            return
+        profile['settings'] = self._collect_profile_settings_from_ui()
+        self._state['global'] = self._collect_global_settings_from_ui()
+
+    def _on_profile_selection_changed(self, index: int):
+        if self._is_switching_profile:
+            return
+        if index < 0:
+            return
+        selected_profile_id = self.profile_combo.itemData(index)
+        if not selected_profile_id or selected_profile_id == self._active_profile_id:
+            return
+
+        self._save_active_profile_from_ui()
+        self._active_profile_id = selected_profile_id
+        self._state['active_profile_id'] = selected_profile_id
+        self._load_profile_settings(selected_profile_id)
+
+    def _profile_name_exists(self, name: str, exclude_profile_id: Optional[str] = None) -> bool:
+        for profile in self._state.get('profiles', []):
+            if exclude_profile_id and profile['id'] == exclude_profile_id:
+                continue
+            if profile['name'].lower() == name.lower():
+                return True
+        return False
+
+    def _create_profile(self):
+        self._save_active_profile_from_ui()
+        name, ok = QInputDialog.getText(self, "New Profile", "Profile name:")
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if self._profile_name_exists(name):
+            QMessageBox.warning(self, "Duplicate Name", "A profile with this name already exists.")
+            return
+
+        existing_ids = {p['id'] for p in self._state.get('profiles', [])}
+        base = "".join(ch.lower() if ch.isalnum() else "_" for ch in name).strip("_") or "profile"
+        profile_id = base
+        n = 2
+        while profile_id in existing_ids:
+            profile_id = f"{base}_{n}"
+            n += 1
+
+        new_profile = {
+            'id': profile_id,
+            'name': name,
+            'settings': deepcopy(self._collect_profile_settings_from_ui()),
+        }
+        self._state['profiles'].append(new_profile)
+        self._active_profile_id = profile_id
+        self._state['active_profile_id'] = profile_id
+        self._refresh_profile_combo()
+        self._load_profile_settings(profile_id)
+
+    def _rename_profile(self):
+        profile = self._get_profile_by_id(self._active_profile_id)
+        if not profile:
+            return
+        name, ok = QInputDialog.getText(self, "Rename Profile", "Profile name:", text=profile['name'])
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if self._profile_name_exists(name, exclude_profile_id=profile['id']):
+            QMessageBox.warning(self, "Duplicate Name", "A profile with this name already exists.")
+            return
+        profile['name'] = name
+        self._refresh_profile_combo()
+
+    def _delete_profile(self):
+        profiles = self._state.get('profiles', [])
+        if len(profiles) <= 1:
+            QMessageBox.information(self, "Cannot Delete", "At least one profile must remain.")
+            return
+
+        profile = self._get_profile_by_id(self._active_profile_id)
+        if not profile:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Profile",
+            f'Delete profile "{profile["name"]}"?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._state['profiles'] = [p for p in profiles if p['id'] != profile['id']]
+        self._active_profile_id = self._state['profiles'][0]['id']
+        self._state['active_profile_id'] = self._active_profile_id
+        self._refresh_profile_combo()
+        self._load_profile_settings(self._active_profile_id)
+
+    def get_state(self) -> Dict[str, Any]:
+        self._save_active_profile_from_ui()
+        return {
+            'version': 2,
+            'active_profile_id': self._active_profile_id,
+            'global': deepcopy(self._state.get('global', self._default_global_settings())),
+            'profiles': deepcopy(self._state.get('profiles', [])),
         }
     
+    def _get_vocabulary_words(self) -> List[str]:
+        words = []
+        for i in range(self._words_list.count()):
+            words.append(self._words_list.item(i).text())
+        return words
+    
+    def _get_vocabulary_substitutions(self) -> Dict[str, str]:
+        subs = {}
+        for i in range(self._subs_list.count()):
+            item = self._subs_list.item(i)
+            source = item.data(Qt.ItemDataRole.UserRole)
+            target = item.data(Qt.ItemDataRole.UserRole + 1)
+            if source and target:
+                subs[source] = target
+        return subs
+    
     def _apply_settings(self):
-        settings = self.get_settings()
-        self.settings_changed.emit(settings)
+        self.settings_changed.emit(self.get_state())
     
     def accept(self):
         if self.hotkey_recorder._recording:

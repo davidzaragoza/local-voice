@@ -1,16 +1,21 @@
 """Transcription engine using faster-whisper for offline STT."""
 
-import os
+import shutil
+import ssl
+import urllib.error
 import urllib.request
 import logging
 import threading
 from pathlib import Path
-from typing import Optional, Callable, Generator
+from typing import Optional, Callable, Generator, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
 from faster_whisper import WhisperModel
+
+if TYPE_CHECKING:
+    from ..vocabulary.manager import VocabularyManager
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,7 @@ class TranscriptionEngine:
     _model_lock = threading.Lock()
     _current_config: Optional[TranscriptionConfig] = None
     _vad_downloaded = False
+    _vocabulary_manager: Optional['VocabularyManager'] = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -70,6 +76,9 @@ class TranscriptionEngine:
         if self._current_config is None:
             self._current_config = TranscriptionConfig()
         self._ensure_vad_model()
+    
+    def set_vocabulary_manager(self, manager: 'VocabularyManager'):
+        self._vocabulary_manager = manager
     
     def _ensure_vad_model(self):
         """Ensure VAD model is available, download if needed."""
@@ -89,13 +98,31 @@ class TranscriptionEngine:
             assets_dir.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"Downloading VAD model to {vad_path}...")
-            urllib.request.urlretrieve(VAD_MODEL_URL, vad_path)
+            self._download_vad_model(vad_path)
             logger.info("VAD model downloaded successfully")
             self._vad_downloaded = True
             
         except Exception as e:
             logger.warning(f"Could not download VAD model: {e}")
             self._vad_downloaded = True
+
+    def _download_vad_model(self, vad_path: Path):
+        """Download VAD model with a certifi-backed SSL fallback for packaged apps."""
+        try:
+            urllib.request.urlretrieve(VAD_MODEL_URL, vad_path)
+            return
+        except urllib.error.URLError as e:
+            reason = str(getattr(e, "reason", e))
+            if "CERTIFICATE_VERIFY_FAILED" not in reason:
+                raise
+            logger.warning("Default SSL certificates failed, retrying VAD download with certifi bundle")
+
+        import certifi
+
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(VAD_MODEL_URL, context=context) as response:
+            with open(vad_path, "wb") as output:
+                shutil.copyfileobj(response, output)
     
     @property
     def model_dir(self) -> Path:
@@ -150,8 +177,6 @@ class TranscriptionEngine:
                 if progress_callback:
                     progress_callback(0.3)
                 
-                model_path = str(self.get_model_path(config.model_size))
-                
                 self._model = WhisperModel(
                     config.model_size.value,
                     device=device,
@@ -167,7 +192,7 @@ class TranscriptionEngine:
                 return True
                 
             except Exception as e:
-                print(f"Failed to load model: {e}")
+                logger.exception(f"Failed to load model: {e}")
                 self._model = None
                 return False
     
@@ -193,16 +218,24 @@ class TranscriptionEngine:
         else:
             audio_float = audio.astype(np.float32).flatten()
         
+        initial_prompt = None
+        if self._vocabulary_manager:
+            initial_prompt = self._vocabulary_manager.get_initial_prompt()
+        
         try:
-            segments_generator, info = self._model.transcribe(
-                audio_float,
-                language=language or self._current_config.language,
-                task=task,
-                beam_size=self._current_config.beam_size,
-                best_of=self._current_config.best_of,
-                temperature=self._current_config.temperature,
-                vad_filter=self._current_config.vad_filter
-            )
+            transcribe_kwargs = {
+                'language': language or self._current_config.language,
+                'task': task,
+                'beam_size': self._current_config.beam_size,
+                'best_of': self._current_config.best_of,
+                'temperature': self._current_config.temperature,
+                'vad_filter': self._current_config.vad_filter
+            }
+            
+            if initial_prompt:
+                transcribe_kwargs['initial_prompt'] = initial_prompt
+            
+            segments_generator, info = self._model.transcribe(audio_float, **transcribe_kwargs)
             
             segments = []
             full_text = []
@@ -223,6 +256,9 @@ class TranscriptionEngine:
             
             text = ' '.join(full_text)
             
+            if self._vocabulary_manager:
+                text = self._vocabulary_manager.apply_substitutions(text)
+            
             return TranscriptionResult(
                 text=text,
                 language=info.language,
@@ -232,7 +268,7 @@ class TranscriptionEngine:
             )
             
         except Exception as e:
-            print(f"Transcription failed: {e}")
+            logger.exception(f"Transcription failed: {e}")
             return None
     
     def transcribe_realtime(
@@ -250,20 +286,31 @@ class TranscriptionEngine:
         else:
             audio_float = audio.astype(np.float32).flatten()
         
+        initial_prompt = None
+        if self._vocabulary_manager:
+            initial_prompt = self._vocabulary_manager.get_initial_prompt()
+        
         try:
-            segments_generator, _ = self._model.transcribe(
-                audio_float,
-                language=language or self._current_config.language,
-                task=task,
-                beam_size=self._current_config.beam_size,
-                vad_filter=self._current_config.vad_filter
-            )
+            transcribe_kwargs = {
+                'language': language or self._current_config.language,
+                'task': task,
+                'beam_size': self._current_config.beam_size,
+                'vad_filter': self._current_config.vad_filter
+            }
+            
+            if initial_prompt:
+                transcribe_kwargs['initial_prompt'] = initial_prompt
+            
+            segments_generator, _ = self._model.transcribe(audio_float, **transcribe_kwargs)
             
             for segment in segments_generator:
-                yield segment.text
+                text = segment.text
+                if self._vocabulary_manager:
+                    text = self._vocabulary_manager.apply_substitutions(text)
+                yield text
                 
         except Exception as e:
-            print(f"Realtime transcription failed: {e}")
+            logger.exception(f"Realtime transcription failed: {e}")
     
     @classmethod
     def get_available_models(cls) -> list[dict]:
