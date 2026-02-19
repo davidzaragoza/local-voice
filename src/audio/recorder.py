@@ -1,14 +1,15 @@
 """Audio recorder module using SoundDevice for high-quality audio capture."""
 
 import threading
-import queue
-import time
+import logging
 from typing import Callable, Optional
 from dataclasses import dataclass
 from enum import Enum, auto
 
 import numpy as np
 import sounddevice as sd
+
+logger = logging.getLogger(__name__)
 
 
 class RecorderState(Enum):
@@ -34,11 +35,11 @@ class AudioRecorder:
         self._audio_buffer: list[np.ndarray] = []
         self._lock = threading.Lock()
         self._stream: Optional[sd.InputStream] = None
-        self._audio_queue: queue.Queue = queue.Queue()
         self._silence_start: Optional[float] = None
         self._voice_detected = False
         self._on_vad_callback: Optional[Callable[[bool], None]] = None
         self._on_audio_callback: Optional[Callable[[np.ndarray], None]] = None
+        self._max_abs_level: float = 0.0
         
     @property
     def state(self) -> RecorderState:
@@ -56,12 +57,15 @@ class AudioRecorder:
     
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status):
         if status:
-            print(f"Audio callback status: {status}")
+            logger.warning(f"Audio callback status: {status}")
         
         if self._state != RecorderState.RECORDING:
             return
         
         audio_chunk = indata.copy()
+        chunk_max_abs = float(np.max(np.abs(audio_chunk))) if audio_chunk.size else 0.0
+        if chunk_max_abs > self._max_abs_level:
+            self._max_abs_level = chunk_max_abs
         
         with self._lock:
             self._audio_buffer.append(audio_chunk)
@@ -102,6 +106,7 @@ class AudioRecorder:
             self._audio_buffer.clear()
             self._voice_detected = False
             self._silence_start = None
+            self._max_abs_level = 0.0
     
     def start_recording(self) -> bool:
         if self._state == RecorderState.RECORDING:
@@ -110,6 +115,24 @@ class AudioRecorder:
         try:
             self.clear_buffer()
             self._state = RecorderState.RECORDING
+            input_device_id = None
+            try:
+                input_device_id = sd.default.device[0]
+            except Exception:
+                pass
+            if input_device_id is not None:
+                try:
+                    device_info = sd.query_devices(input_device_id)
+                    logger.info(
+                        "Using input device id=%s name='%s' default_samplerate=%s",
+                        input_device_id,
+                        device_info.get("name"),
+                        device_info.get("default_samplerate"),
+                    )
+                except Exception as e:
+                    logger.warning("Could not query selected input device (%s): %s", input_device_id, e)
+            else:
+                logger.info("Using default input device (system-selected)")
             
             self._stream = sd.InputStream(
                 samplerate=self.config.sample_rate,
@@ -121,7 +144,7 @@ class AudioRecorder:
             self._stream.start()
             return True
         except Exception as e:
-            print(f"Failed to start recording: {e}")
+            logger.error(f"Failed to start recording: {e}")
             self._state = RecorderState.IDLE
             return False
     
@@ -138,6 +161,21 @@ class AudioRecorder:
         
         audio_data = self.get_audio_data()
         self._state = RecorderState.IDLE
+        
+        if audio_data is not None and audio_data.size > 0:
+            rms = float(np.sqrt(np.mean(audio_data ** 2)))
+            peak = float(np.max(np.abs(audio_data)))
+            logger.info(
+                "Captured audio stats: samples=%s rms=%.6f peak=%.6f chunk_peak=%.6f",
+                audio_data.shape[0],
+                rms,
+                peak,
+                self._max_abs_level,
+            )
+            if peak < 0.001:
+                logger.warning(
+                    "Audio signal is near-silent. Check microphone permission for LocalVoice and selected input device."
+                )
         
         return audio_data
     

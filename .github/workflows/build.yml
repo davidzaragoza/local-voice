@@ -54,6 +54,7 @@ jobs:
           python -m nuitka `
             --onefile `
             --enable-plugin=pyside6 `
+            --include-package-data=certifi `
             --output-filename=LocalVoice.exe `
             --output-dir=dist `
             --company-name="LocalVoice" `
@@ -72,6 +73,7 @@ jobs:
           python -m nuitka \
             --onefile \
             --enable-plugin=pyside6 \
+            --include-package-data=certifi \
             --output-filename=LocalVoice \
             --output-dir=dist \
             --include-package=src \
@@ -83,11 +85,20 @@ jobs:
           python -m nuitka \
             --mode=app \
             --enable-plugin=pyside6 \
+            --include-package-data=certifi \
             --output-filename=LocalVoice \
             --output-dir=dist \
             --macos-app-name=LocalVoice \
+            --macos-app-protected-resource="NSMicrophoneUsageDescription:LocalVoice needs microphone access to transcribe speech." \
             --include-package=src \
             localvoice.py
+
+          PLIST="dist/localvoice.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.localvoice.app" "$PLIST" || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.localvoice.app" "$PLIST"
+
+          # Re-sign after Info.plist mutation; otherwise macOS can report the app as damaged.
+          codesign --force --deep --sign - dist/localvoice.app
           
           cd dist && zip -r LocalVoice-macOS.zip localvoice.app
 

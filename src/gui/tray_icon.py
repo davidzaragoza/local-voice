@@ -6,18 +6,23 @@ from PySide6.QtWidgets import QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
 from PySide6.QtCore import Signal, QObject, Qt
 
+from .themes import get_theme, get_menu_stylesheet
+
 
 class TrayIcon(QSystemTrayIcon):
     show_window_requested = Signal()
     hide_window_requested = Signal()
     settings_requested = Signal()
+    history_requested = Signal()
     quit_requested = Signal()
     recording_toggled = Signal(bool)
+    profile_selected = Signal(str)
     _state_change_requested = Signal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._is_recording = False
+        self._theme = "dark"
         self._create_icons()
         self._create_menu()
         
@@ -25,12 +30,17 @@ class TrayIcon(QSystemTrayIcon):
         
         self.activated.connect(self._on_activated)
         self.setIcon(self._idle_icon)
-        self.setToolTip("LocalVoice - Ready")
+    
+    def set_theme(self, theme_name: str):
+        self._theme = theme_name
+        self._create_icons()
+        self._menu.setStyleSheet(get_menu_stylesheet(theme_name))
     
     def _create_icons(self):
-        self._idle_icon = self._create_icon(QColor(100, 100, 100))
-        self._recording_icon = self._create_icon(QColor(220, 60, 60))
-        self._processing_icon = self._create_icon(QColor(80, 130, 200))
+        theme = get_theme(self._theme)
+        self._idle_icon = self._create_icon(QColor(theme['tray_idle']))
+        self._recording_icon = self._create_icon(QColor(theme['tray_recording']))
+        self._processing_icon = self._create_icon(QColor(theme['tray_processing']))
     
     def _create_icon(self, color: QColor) -> QIcon:
         pixmap = QPixmap(64, 64)
@@ -62,26 +72,7 @@ class TrayIcon(QSystemTrayIcon):
     
     def _create_menu(self):
         self._menu = QMenu()
-        self._menu.setStyleSheet("""
-            QMenu {
-                background-color: #2d2d2d;
-                color: #ffffff;
-                border: 1px solid #444444;
-                padding: 5px;
-            }
-            QMenu::item {
-                padding: 5px 20px;
-                border-radius: 3px;
-            }
-            QMenu::item:selected {
-                background-color: #444444;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: #444444;
-                margin: 5px 10px;
-            }
-        """)
+        self._menu.setStyleSheet(get_menu_stylesheet(self._theme))
         
         self._toggle_action = QAction("Start Recording", self)
         self._toggle_action.triggered.connect(self._toggle_recording)
@@ -103,6 +94,13 @@ class TrayIcon(QSystemTrayIcon):
         settings_action.triggered.connect(self.settings_requested.emit)
         self._menu.addAction(settings_action)
         
+        history_action = QAction("History", self)
+        history_action.triggered.connect(self.history_requested.emit)
+        self._menu.addAction(history_action)
+
+        self._profiles_menu = QMenu("Profiles", self._menu)
+        self._menu.addMenu(self._profiles_menu)
+        
         self._menu.addSeparator()
         
         quit_action = QAction("Quit", self)
@@ -110,6 +108,17 @@ class TrayIcon(QSystemTrayIcon):
         self._menu.addAction(quit_action)
         
         self.setContextMenu(self._menu)
+
+    def set_profiles(self, profiles: list[tuple[str, str]], active_profile_id: str):
+        self._profiles_menu.clear()
+        for profile_id, profile_name in profiles:
+            action = QAction(profile_name, self._profiles_menu)
+            action.setCheckable(True)
+            action.setChecked(profile_id == active_profile_id)
+            action.triggered.connect(
+                lambda checked, pid=profile_id: self.profile_selected.emit(pid)
+            )
+            self._profiles_menu.addAction(action)
     
     def _on_activated(self, reason):
         try:
@@ -132,26 +141,23 @@ class TrayIcon(QSystemTrayIcon):
     def set_state(self, state: str):
         self._state_change_requested.emit(state)
     
+    def show_message(self, title: str, message: str, duration: int = 2000):
+        self.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, duration)
+    
     def _do_set_state(self, state: str):
         if state == "idle":
             self.setIcon(self._idle_icon)
-            self.setToolTip("LocalVoice - Ready")
         elif state == "recording":
             self.setIcon(self._recording_icon)
-            self.setToolTip("LocalVoice - Recording...")
         elif state == "processing":
             self.setIcon(self._processing_icon)
-            self.setToolTip("LocalVoice - Processing...")
         elif state == "error":
             self.setIcon(self._idle_icon)
-            self.setToolTip("LocalVoice - Error")
     
     def _update_state(self):
         if self._is_recording:
             self._toggle_action.setText("Stop Recording")
             self.setIcon(self._recording_icon)
-            self.setToolTip("LocalVoice - Recording...")
         else:
             self._toggle_action.setText("Start Recording")
             self.setIcon(self._idle_icon)
-            self.setToolTip("LocalVoice - Ready")

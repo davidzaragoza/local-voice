@@ -2,7 +2,10 @@
 
 import threading
 import logging
-from typing import Callable, Optional, Set, List
+import sys
+import platform
+import ctypes
+from typing import Callable, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -10,6 +13,38 @@ from pynput import keyboard
 from pynput.keyboard import Key, KeyCode
 
 logger = logging.getLogger(__name__)
+
+
+def _is_macos_accessibility_trusted() -> bool:
+    """Best-effort check for macOS accessibility trust."""
+    if platform.system() != "Darwin":
+        return True
+    try:
+        app_services = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+        app_services.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(app_services.AXIsProcessTrusted())
+    except Exception:
+        return True
+
+
+def _is_macos_input_monitoring_trusted() -> bool:
+    """Best-effort check for macOS Input Monitoring trust."""
+    if platform.system() != "Darwin":
+        return True
+    try:
+        app_services = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+        preflight = getattr(app_services, "CGPreflightListenEventAccess", None)
+        if preflight is None:
+            # Not available on older systems, avoid false negatives.
+            return True
+        preflight.restype = ctypes.c_bool
+        return bool(preflight())
+    except Exception:
+        return True
 
 
 class HotkeyAction(Enum):
@@ -241,6 +276,20 @@ class HotkeyManager:
             return True
         
         try:
+            if not _is_macos_accessibility_trusted():
+                logger.warning(
+                    "macOS Accessibility trust is not granted for this app binary (%s). "
+                    "Go to System Settings -> Privacy & Security -> Accessibility and enable LocalVoice, "
+                    "then restart the app.",
+                    sys.executable,
+                )
+            if not _is_macos_input_monitoring_trusted():
+                logger.warning(
+                    "macOS Input Monitoring trust is not granted for this app binary (%s). "
+                    "Go to System Settings -> Privacy & Security -> Input Monitoring and enable LocalVoice, "
+                    "then restart the app.",
+                    sys.executable,
+                )
             logger.info(f"Starting hotkey listener for: {self.config.hotkey} (mode: {self.config.mode})")
             self._listener = keyboard.Listener(
                 on_press=self._on_press,
@@ -252,7 +301,6 @@ class HotkeyManager:
             return True
         except Exception as e:
             logger.error(f"Failed to start hotkey listener: {e}")
-            print(f"Failed to start hotkey listener: {e}")
             return False
     
     def stop(self):
