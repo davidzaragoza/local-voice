@@ -64,6 +64,11 @@ localvoice
 ```
 
 This installs LocalVoice from the repository and exposes `localvoice` as a global command in your user environment.
+For Python 3.9, if installation fails during bytecode compilation, use:
+
+```bash
+pipx install --pip-args="--no-compile" git+https://github.com/davidzaragoza/local-voice.git
+```
 
 ### Option 3: Install from GitHub with `pip` (virtualenv)
 
@@ -73,6 +78,12 @@ source .venv/bin/activate
 pip install -U pip
 pip install git+https://github.com/davidzaragoza/local-voice.git
 localvoice
+```
+
+If you're on Python 3.9 and hit a `PyCompileError` while installing `PySide6`, use:
+
+```bash
+pip install --no-compile git+https://github.com/davidzaragoza/local-voice.git
 ```
 
 ### About "system-level" install on macOS

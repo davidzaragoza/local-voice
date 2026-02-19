@@ -40,6 +40,8 @@ class AudioRecorder:
         self._on_vad_callback: Optional[Callable[[bool], None]] = None
         self._on_audio_callback: Optional[Callable[[np.ndarray], None]] = None
         self._max_abs_level: float = 0.0
+        self._active_sample_rate: int = self.config.sample_rate
+        self._input_device_id: Optional[int] = None
         
     @property
     def state(self) -> RecorderState:
@@ -120,9 +122,14 @@ class AudioRecorder:
                 input_device_id = sd.default.device[0]
             except Exception:
                 pass
+            self._input_device_id = input_device_id
+
+            selected_sample_rate = self.config.sample_rate
+            device_default_rate = None
             if input_device_id is not None:
                 try:
                     device_info = sd.query_devices(input_device_id)
+                    device_default_rate = int(float(device_info.get("default_samplerate", self.config.sample_rate)))
                     logger.info(
                         "Using input device id=%s name='%s' default_samplerate=%s",
                         input_device_id,
@@ -133,9 +140,30 @@ class AudioRecorder:
                     logger.warning("Could not query selected input device (%s): %s", input_device_id, e)
             else:
                 logger.info("Using default input device (system-selected)")
+
+            # Probe for a stable/valid stream configuration; some macOS devices crash with unsupported rates.
+            candidate_rates = [self.config.sample_rate]
+            if device_default_rate and device_default_rate not in candidate_rates:
+                candidate_rates.append(device_default_rate)
+            for rate in candidate_rates:
+                try:
+                    sd.check_input_settings(
+                        device=input_device_id,
+                        channels=self.config.channels,
+                        dtype=self.config.dtype,
+                        samplerate=rate,
+                    )
+                    selected_sample_rate = rate
+                    break
+                except Exception as e:
+                    logger.warning("Input settings rejected for samplerate=%s: %s", rate, e)
+
+            self._active_sample_rate = selected_sample_rate
+            logger.info("Opening input stream at samplerate=%s", self._active_sample_rate)
             
             self._stream = sd.InputStream(
-                samplerate=self.config.sample_rate,
+                device=input_device_id,
+                samplerate=self._active_sample_rate,
                 channels=self.config.channels,
                 dtype=self.config.dtype,
                 blocksize=self.config.block_size,
@@ -176,8 +204,39 @@ class AudioRecorder:
                 logger.warning(
                     "Audio signal is near-silent. Check microphone permission for LocalVoice and selected input device."
                 )
+
+        if (
+            audio_data is not None
+            and audio_data.size > 0
+            and self._active_sample_rate != self.config.sample_rate
+        ):
+            source_rate = int(self._active_sample_rate)
+            target_rate = int(self.config.sample_rate)
+            logger.info("Resampling audio from %s Hz to %s Hz", source_rate, target_rate)
+            audio_data = self._resample_audio(audio_data, source_rate, target_rate)
         
         return audio_data
+
+    def _resample_audio(self, audio_data: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+        if source_rate == target_rate:
+            return audio_data
+
+        if audio_data.ndim == 1:
+            audio_data = audio_data.reshape(-1, 1)
+
+        in_samples = audio_data.shape[0]
+        if in_samples < 2:
+            return audio_data
+
+        out_samples = max(1, int(round(in_samples * (target_rate / float(source_rate)))))
+        x_old = np.linspace(0, in_samples - 1, num=in_samples, dtype=np.float64)
+        x_new = np.linspace(0, in_samples - 1, num=out_samples, dtype=np.float64)
+
+        channels = audio_data.shape[1]
+        resampled = np.empty((out_samples, channels), dtype=np.float32)
+        for ch in range(channels):
+            resampled[:, ch] = np.interp(x_new, x_old, audio_data[:, ch]).astype(np.float32)
+        return resampled
     
     def get_input_devices(self) -> list[dict]:
         devices = []
