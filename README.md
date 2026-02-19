@@ -28,7 +28,7 @@ Key goal: local-first dictation with no cloud dependency for transcription.
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.11+
 - PortAudio (for microphone capture via `sounddevice`)
 
 ## Installation
@@ -59,43 +59,20 @@ python localvoice.py
 ### Option 2: Install from GitHub with `pipx` (recommended)
 
 ```bash
-pipx install git+https://github.com/davidzaragoza/local-voice.git
+pipx install --python python3.11 git+https://github.com/davidzaragoza/local-voice.git
 localvoice
 ```
 
 This installs LocalVoice from the repository and exposes `localvoice` as a global command in your user environment.
-For Python 3.9, if installation fails during bytecode compilation, use:
-
-```bash
-pipx install --pip-args="--no-compile" git+https://github.com/davidzaragoza/local-voice.git
-```
-
-If your environment still fails with `TypeError: encode() argument 'encoding' must be str, not None`, run:
-
-```bash
-PYTHONIOENCODING=utf-8 pipx install --pip-args="--no-compile" git+https://github.com/davidzaragoza/local-voice.git
-```
 
 ### Option 3: Install from GitHub with `pip` (virtualenv)
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install git+https://github.com/davidzaragoza/local-voice.git
 localvoice
-```
-
-If you're on Python 3.9 and hit a `PyCompileError` while installing `PySide6`, use:
-
-```bash
-pip install --no-compile git+https://github.com/davidzaragoza/local-voice.git
-```
-
-If your shell/environment reports `sys.stdout.encoding` issues, run:
-
-```bash
-PYTHONIOENCODING=utf-8 pip install --no-compile git+https://github.com/davidzaragoza/local-voice.git
 ```
 
 ### About "system-level" install on macOS

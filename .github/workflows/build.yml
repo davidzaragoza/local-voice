@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+        python-version: ["3.11"]
 
     steps:
       - name: Check out repository
@@ -36,11 +36,9 @@ jobs:
           sudo apt-get install -y libportaudio2 libportaudiocpp0 portaudio19-dev
 
       - name: Install package
-        env:
-          PYTHONIOENCODING: utf-8
         run: |
           python -m pip install --upgrade pip wheel
-          pip install --no-compile .
+          pip install .
 
       - name: Smoke test imports
         run: |
