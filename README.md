@@ -68,14 +68,22 @@ Artifacts are available in the repository Actions tab for each workflow run.
 
 ## macOS permissions
 
-On macOS, grant:
+On macOS, LocalVoice requires all of the following:
 
 1. Microphone access
 2. Accessibility access (for global hotkeys and text injection)
 3. Input Monitoring access (for global hotkey listening)
 
+System Settings -> Privacy & Security -> Microphone
 System Settings -> Privacy & Security -> Accessibility
 System Settings -> Privacy & Security -> Input Monitoring
+
+First-launch flow:
+
+1. Open `localvoice.app` from `/Applications`.
+2. Accept macOS permission popups when prompted.
+3. If a permission is not granted, LocalVoice opens the corresponding Privacy pane and asks you to retry.
+4. After granting Accessibility/Input Monitoring, restart LocalVoice if macOS does not apply the change immediately.
 
 Important: grant permissions to the installed `localvoice.app` binary (the one in `/Applications`), not only to your Python interpreter.
 The macOS build uses a stable bundle identifier so permissions persist better across updates.
