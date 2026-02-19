@@ -37,7 +37,7 @@ Key goal: local-first dictation with no cloud dependency for transcription.
 
 ```bash
 # Clone
-git clone <repository-url>
+git clone https://github.com/davidzaragoza/local-voice.git
 cd local-voice
 
 # Install dependencies
