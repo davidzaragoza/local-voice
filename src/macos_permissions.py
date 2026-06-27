@@ -132,6 +132,7 @@ def open_privacy_settings(permission_name: str):
 
     url = f"x-apple.systempreferences:com.apple.preference.security?{anchor}"
     try:
-        subprocess.Popen(["open", url])
+        # `open` returns immediately; run() reaps it so no zombie is left behind.
+        subprocess.run(["open", url], check=False)
     except Exception as e:
         logger.warning("Failed opening macOS Settings pane for %s: %s", permission_name, e)

@@ -1,10 +1,15 @@
 """Profile-aware settings management with legacy migration support."""
 
 import json
+import logging
+import os
 import re
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileManager:
@@ -31,6 +36,62 @@ class ProfileManager:
         "vocabulary_substitutions",
         "copy_only",
     }
+
+    # Expected python type per key plus optional numeric clamp (min, max).
+    # Values that don't match the expected type are dropped so the default is
+    # kept, protecting against hand-edited or corrupt settings.json.
+    _VALUE_SPEC = {
+        "start_minimized": {"type": bool},
+        "window_opacity": {"type": int, "min": 30, "max": 100},
+        "theme": {"type": str},
+        "model_size": {"type": str},
+        "language": {"type": str},
+        "translate_to_english": {"type": bool},
+        "hotkey": {"type": str},
+        "hotkey_mode": {"type": str},
+        "injection_method": {"type": str},
+        "device": {"type": str},
+        "typing_delay": {"type": int, "min": 0, "max": 1000},
+        "add_trailing_space": {"type": bool},
+        "preserve_clipboard": {"type": bool},
+        "input_device": {"type": int, "min": 0, "allow_none": True},
+        "enable_sounds": {"type": bool},
+        "enable_history": {"type": bool},
+        "history_max_entries": {"type": int, "min": 1, "max": 100000},
+        "vocabulary_words": {"type": list},
+        "vocabulary_substitutions": {"type": dict},
+        "copy_only": {"type": bool},
+    }
+
+    @classmethod
+    def _coerce_value(cls, key: str, value: Any):
+        """Validate/clamp a setting value.
+
+        Returns (is_valid, coerced_value). When is_valid is False the caller
+        should keep the existing default instead of the incoming value.
+        """
+        spec = cls._VALUE_SPEC.get(key)
+        if spec is None:
+            return True, value
+
+        if value is None:
+            return (True, None) if spec.get("allow_none") else (False, None)
+
+        expected = spec["type"]
+        # bool is a subclass of int; guard so a bool isn't accepted as int and
+        # an int (e.g. 0/1) isn't silently accepted as bool.
+        if expected is int:
+            if isinstance(value, bool) or not isinstance(value, int):
+                return False, None
+        elif not isinstance(value, expected):
+            return False, None
+
+        if expected is int:
+            if "min" in spec:
+                value = max(spec["min"], value)
+            if "max" in spec:
+                value = min(spec["max"], value)
+        return True, value
 
     def __init__(self):
         self._settings_file = Path(__file__).parent.parent.parent / "config" / "settings.json"
@@ -87,7 +148,11 @@ class ProfileManager:
         try:
             with open(self._settings_file, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-        except Exception:
+        except Exception as e:
+            # Preserve the unreadable file so the user can recover it manually
+            # instead of silently destroying their profiles/settings.
+            logger.error("Failed to read settings file, backing up and resetting: %s", e)
+            self._backup_corrupt_settings()
             self._state = self._default_state()
             self._save()
             return
@@ -102,8 +167,32 @@ class ProfileManager:
 
     def _save(self):
         self._settings_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._settings_file, "w", encoding="utf-8") as f:
-            json.dump(self._state, f, indent=4, ensure_ascii=False)
+        # Write to a temp file then atomically replace, so a crash mid-write
+        # can never leave a truncated/corrupt settings.json behind.
+        tmp_path = self._settings_file.with_suffix(self._settings_file.suffix + ".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._state, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self._settings_file)
+        except Exception as e:
+            logger.error("Failed to save settings file: %s", e)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+
+    def _backup_corrupt_settings(self):
+        try:
+            backup_path = self._settings_file.with_name(
+                f"{self._settings_file.name}.corrupt-{int(time.time())}"
+            )
+            os.replace(self._settings_file, backup_path)
+            logger.warning("Backed up corrupt settings to %s", backup_path)
+        except Exception as e:
+            logger.error("Could not back up corrupt settings file: %s", e)
 
     def _is_legacy_settings(self, data: Dict[str, Any]) -> bool:
         return "profiles" not in data or "global" not in data
@@ -139,7 +228,9 @@ class ProfileManager:
         if isinstance(loaded_global, dict):
             for key in self.GLOBAL_KEYS:
                 if key in loaded_global:
-                    normalized["global"][key] = loaded_global[key]
+                    valid, value = self._coerce_value(key, loaded_global[key])
+                    if valid:
+                        normalized["global"][key] = value
 
         loaded_profiles = state.get("profiles", [])
         profiles: List[Dict[str, Any]] = []
@@ -166,7 +257,9 @@ class ProfileManager:
                 if isinstance(profile_settings, dict):
                     for key in self.PROFILE_KEYS:
                         if key in profile_settings:
-                            settings[key] = profile_settings[key]
+                            valid, value = self._coerce_value(key, profile_settings[key])
+                            if valid:
+                                settings[key] = value
 
                 profiles.append(
                     {

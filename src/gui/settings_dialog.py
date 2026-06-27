@@ -1,5 +1,6 @@
 """Settings dialog for LocalVoice configuration."""
 
+import logging
 from copy import deepcopy
 from typing import Optional, Dict, Any, Set, List
 
@@ -15,10 +16,10 @@ from PySide6.QtGui import QKeyEvent
 
 import sounddevice as sd
 
+logger = logging.getLogger(__name__)
+
 
 class HotkeyRecorder(QLineEdit):
-    hotkey_recorded = Signal(str)
-    
     KEY_MAP = {
         Qt.Key.Key_CapsLock: 'Caps Lock',
         Qt.Key.Key_F1: 'F1',
@@ -72,6 +73,9 @@ class HotkeyRecorder(QLineEdit):
         self._finalize_timer.setSingleShot(True)
         self._finalize_timer.timeout.connect(self._finalize_hotkey)
     
+    def is_recording(self) -> bool:
+        return self._recording
+
     def start_recording(self):
         self._recording = True
         self._pressed_modifiers = set()
@@ -500,7 +504,8 @@ class SettingsDialog(QDialog):
                         name = name[:47] + "..."
                     self.input_device_combo.addItem(f"{name}", i)
         except Exception as e:
-            self.input_device_combo.addItem("Error loading devices", None)
+            # Keep only the "Default" item; don't add a fake selectable entry.
+            logger.warning("Could not enumerate input devices: %s", e)
     
     def _create_model_tab(self) -> QWidget:
         widget = QWidget()
@@ -584,7 +589,7 @@ class SettingsDialog(QDialog):
         return widget
     
     def _toggle_recording(self):
-        if self.hotkey_recorder._recording:
+        if self.hotkey_recorder.is_recording():
             self.hotkey_recorder.stop_recording()
             self.record_btn.setText("Record")
         else:
@@ -1056,12 +1061,12 @@ class SettingsDialog(QDialog):
         self.settings_changed.emit(self.get_state())
     
     def accept(self):
-        if self.hotkey_recorder._recording:
+        if self.hotkey_recorder.is_recording():
             self.hotkey_recorder.stop_recording()
         self._apply_settings()
         super().accept()
-    
+
     def reject(self):
-        if self.hotkey_recorder._recording:
+        if self.hotkey_recorder.is_recording():
             self.hotkey_recorder.stop_recording()
         super().reject()

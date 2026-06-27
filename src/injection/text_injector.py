@@ -31,55 +31,55 @@ class TextInjector:
     def __init__(self, config: Optional[InjectionConfig] = None):
         self.config = config or InjectionConfig()
         self._keyboard_controller = keyboard.Controller()
-        self._clipboard_backup: Optional[str] = None
         self._on_complete_callback: Optional[Callable[[], None]] = None
-    
+        # Serialize injections so concurrent calls can't interleave clipboard
+        # backup/restore and clobber each other (or the user's clipboard).
+        self._inject_lock = threading.Lock()
+
     def set_on_complete_callback(self, callback: Callable[[], None]):
         self._on_complete_callback = callback
-    
-    def _backup_clipboard(self) -> bool:
+
+    def _backup_clipboard(self) -> Optional[str]:
         if not self.config.preserve_clipboard:
-            return True
-        
+            return None
+
         try:
-            self._clipboard_backup = pyperclip.paste()
-            return True
+            return pyperclip.paste()
         except Exception:
-            self._clipboard_backup = None
-            return False
-    
-    def _restore_clipboard(self):
-        if not self.config.preserve_clipboard or self._clipboard_backup is None:
+            return None
+
+    def _restore_clipboard(self, backup: Optional[str]):
+        if not self.config.preserve_clipboard or backup is None:
             return
-        
+
         try:
             time.sleep(0.05)
-            pyperclip.copy(self._clipboard_backup)
+            pyperclip.copy(backup)
         except Exception as e:
             logger.warning(f"Failed to restore clipboard: {e}")
-        finally:
-            self._clipboard_backup = None
-    
+
     def inject_clipboard(self, text: str) -> bool:
+        backup = None
         try:
             logger.info(f"Injecting text via clipboard: {text[:50]}...")
-            self._backup_clipboard()
+            backup = self._backup_clipboard()
             pyperclip.copy(text)
             time.sleep(0.05)
-            
+
             modifier = self._get_modifier_key_for_platform()
-            
+
             with self._keyboard_controller.pressed(modifier):
                 self._keyboard_controller.press('v')
                 self._keyboard_controller.release('v')
-            
+
             time.sleep(0.1)
-            self._restore_clipboard()
+            self._restore_clipboard(backup)
             logger.info("Clipboard injection successful")
             return True
-            
+
         except Exception as e:
             logger.error(f"Clipboard injection failed: {e}")
+            self._restore_clipboard(backup)
             return False
     
     def inject_keyboard(self, text: str) -> bool:
@@ -108,32 +108,40 @@ class TextInjector:
     def inject(self, text: str) -> bool:
         if not text.strip():
             return False
-        
+
         if self.config.add_trailing_space and not text.endswith(' ') and not text.endswith('\n'):
             text += ' '
-        
-        if self.config.method == InjectionMethod.CLIPBOARD:
-            return self.inject_clipboard(text)
-        
-        elif self.config.method == InjectionMethod.KEYBOARD:
-            return self.inject_keyboard(text)
-        
-        elif self.config.method == InjectionMethod.CLIPBOARD_KEYBOARD_FALLBACK:
-            success = self.inject_clipboard(text)
-            if not success:
+
+        with self._inject_lock:
+            if self.config.method == InjectionMethod.CLIPBOARD:
+                return self.inject_clipboard(text)
+
+            elif self.config.method == InjectionMethod.KEYBOARD:
                 return self.inject_keyboard(text)
-            return success
-        
+
+            elif self.config.method == InjectionMethod.CLIPBOARD_KEYBOARD_FALLBACK:
+                success = self.inject_clipboard(text)
+                if not success:
+                    return self.inject_keyboard(text)
+                return success
+
         return False
-    
+
     def inject_async(self, text: str, callback: Optional[Callable[[bool], None]] = None):
         def _inject():
-            success = self.inject(text)
-            if callback:
-                callback(success)
-            if self._on_complete_callback:
-                self._on_complete_callback()
-        
+            success = False
+            try:
+                success = self.inject(text)
+            except Exception as e:
+                logger.error(f"Injection failed: {e}")
+            finally:
+                # Always fire completion callbacks so the UI never gets stuck
+                # in the PROCESSING state if injection raises.
+                if callback:
+                    callback(success)
+                if self._on_complete_callback:
+                    self._on_complete_callback()
+
         thread = threading.Thread(target=_inject, daemon=True)
         thread.start()
     

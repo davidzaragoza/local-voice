@@ -82,17 +82,25 @@ class AudioRecorder:
         self._detect_voice_activity(audio_chunk)
     
     def _detect_voice_activity(self, audio_chunk: np.ndarray):
-        rms = np.sqrt(np.mean(audio_chunk ** 2))
+        if audio_chunk.size == 0:
+            return
+
+        rms = float(np.sqrt(np.mean(audio_chunk ** 2)))
         is_voice = rms > self.config.silence_threshold
-        
+
+        # Edge-triggered: only notify on a state transition so the callback
+        # fires once on voice start and once on voice end, not on every block.
         if is_voice:
-            self._voice_detected = True
             self._silence_start = None
-            if self._on_vad_callback:
-                self._on_vad_callback(True)
+            if not self._voice_detected:
+                self._voice_detected = True
+                if self._on_vad_callback:
+                    self._on_vad_callback(True)
         else:
-            if self._on_vad_callback and self._voice_detected:
-                self._on_vad_callback(False)
+            if self._voice_detected:
+                self._voice_detected = False
+                if self._on_vad_callback:
+                    self._on_vad_callback(False)
     
     def get_audio_data(self) -> Optional[np.ndarray]:
         with self._lock:
@@ -105,7 +113,10 @@ class AudioRecorder:
         audio_data = self.get_audio_data()
         if audio_data is None:
             return None
-        return (audio_data * 32767).astype(np.int16).tobytes()
+        # Clip to [-1, 1] before scaling so float samples slightly above 1.0
+        # don't wrap around to loud clicks when cast to int16.
+        clipped = np.clip(audio_data, -1.0, 1.0)
+        return (clipped * 32767).astype(np.int16).tobytes()
     
     def clear_buffer(self):
         with self._lock:
@@ -120,6 +131,13 @@ class AudioRecorder:
             return True
         
         try:
+            if self._stream is not None:
+                # Defensively close any stream left over from a prior failed start.
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
             self.clear_buffer()
             self._state = RecorderState.RECORDING
             input_device_id = None
@@ -179,6 +197,13 @@ class AudioRecorder:
             return True
         except Exception as e:
             logger.error(f"Failed to start recording: {e}")
+            if self._stream is not None:
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
+            self._recording_started_at = None
             self._state = RecorderState.IDLE
             return False
     
@@ -271,7 +296,12 @@ class AudioRecorder:
         return devices
     
     def set_input_device(self, device_id: int):
-        sd.default.device[0] = device_id
+        try:
+            current = sd.default.device
+            output_device = current[1] if isinstance(current, (list, tuple)) else None
+            sd.default.device = (device_id, output_device)
+        except Exception as e:
+            logger.warning("Could not set input device %s: %s", device_id, e)
     
     def __enter__(self):
         return self

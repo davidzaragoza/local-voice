@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QLabel, QMessageBox, QFileDialog,
     QApplication
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from pathlib import Path
 
 from .manager import HistoryManager, HistoryEntry
@@ -24,6 +24,10 @@ class HistoryDialog(QDialog):
         self._current_search = ""
         self._active_profile_id: Optional[str] = None
         self._active_profile_name: str = "All Profiles"
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self._load_entries)
         self._init_ui()
         self._load_entries()
     
@@ -122,7 +126,8 @@ class HistoryDialog(QDialog):
     
     def _on_search_changed(self, text: str):
         self._current_search = text.strip()
-        self._load_entries()
+        # Debounce so large histories aren't re-queried on every keystroke.
+        self._search_timer.start()
     
     def _on_selection_changed(self):
         has_selection = len(self._entries_list.selectedItems()) > 0

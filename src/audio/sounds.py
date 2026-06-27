@@ -10,14 +10,18 @@ import soundfile as sf
 
 class SoundManager:
     _instance: Optional['SoundManager'] = None
-    
+    _instance_lock = threading.Lock()
+
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._enabled = False
-            cls._instance._sound_file = Path(__file__).parent.parent.parent / "assets" / "bip.wav"
-            cls._instance._sound_data: Optional[tuple] = None
-            cls._instance._load_sound()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    instance = super().__new__(cls)
+                    instance._enabled = False
+                    instance._sound_file = Path(__file__).parent.parent.parent / "assets" / "bip.wav"
+                    instance._sound_data: Optional[tuple] = None
+                    instance._load_sound()
+                    cls._instance = instance
         return cls._instance
     
     @property
@@ -43,21 +47,20 @@ class SoundManager:
             return
         try:
             data, sample_rate = self._sound_data
+            # sd.play is already non-blocking; no extra thread needed.
             sd.play(data, sample_rate)
         except Exception:
             pass
-    
+
     def play_start_sound(self):
         if not self._enabled:
             return
-        thread = threading.Thread(target=self._play_sound, daemon=True)
-        thread.start()
-    
+        self._play_sound()
+
     def play_stop_sound(self):
         if not self._enabled:
             return
-        thread = threading.Thread(target=self._play_sound, daemon=True)
-        thread.start()
+        self._play_sound()
 
 
 def get_sound_manager() -> SoundManager:

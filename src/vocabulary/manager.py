@@ -10,6 +10,8 @@ class VocabularyManager:
     def __init__(self):
         self._words: List[str] = []
         self._substitutions: Dict[str, str] = {}
+        self._compiled_pattern: Optional[re.Pattern] = None
+        self._lookup: Dict[str, str] = {}
     
     @property
     def words(self) -> List[str]:
@@ -54,18 +56,47 @@ class VocabularyManager:
         if not source or not target:
             return False
         self._substitutions[source] = target
+        self._invalidate_cache()
         return True
-    
+
     def remove_substitution(self, source: str) -> bool:
         source = source.strip()
         if source in self._substitutions:
             del self._substitutions[source]
+            self._invalidate_cache()
             return True
         return False
-    
+
     def set_substitutions(self, substitutions: Dict[str, str]) -> bool:
-        self._substitutions = substitutions.copy()
+        # Validate/coerce so a hand-edited or corrupt settings.json (non-str
+        # keys/values, empty/whitespace keys) can't raise inside re at
+        # transcription time.
+        cleaned: Dict[str, str] = {}
+        if isinstance(substitutions, dict):
+            for source, target in substitutions.items():
+                if not isinstance(source, str) or not isinstance(target, str):
+                    continue
+                source = source.strip()
+                target = target.strip()
+                if not source or not target:
+                    continue
+                cleaned[source] = target
+        self._substitutions = cleaned
+        self._invalidate_cache()
         return True
+
+    def _invalidate_cache(self):
+        self._compiled_pattern = None
+        self._lookup = {}
+
+    def _build_cache(self):
+        # Build a single alternation regex so each source is matched only
+        # against the original text (no cascade) in one pass. Longer sources
+        # first so they take precedence over shorter overlapping ones.
+        self._lookup = {source.lower(): target for source, target in self._substitutions.items()}
+        sources = sorted(self._substitutions.keys(), key=len, reverse=True)
+        pattern_str = '|'.join(re.escape(s) for s in sources)
+        self._compiled_pattern = re.compile(pattern_str, re.IGNORECASE)
     
     def get_initial_prompt(self) -> Optional[str]:
         if not self._words:
@@ -76,14 +107,16 @@ class VocabularyManager:
     def apply_substitutions(self, text: str) -> str:
         if not self._substitutions:
             return text
-        
-        result = text
-        for source, target in self._substitutions.items():
-            pattern = re.compile(re.escape(source), re.IGNORECASE)
-            result = pattern.sub(target, result)
-        
-        return result
-    
+
+        if self._compiled_pattern is None:
+            self._build_cache()
+
+        def _replace(match: re.Match) -> str:
+            return self._lookup.get(match.group(0).lower(), match.group(0))
+
+        return self._compiled_pattern.sub(_replace, text)
+
     def clear_all(self):
         self._words = []
         self._substitutions = {}
+        self._invalidate_cache()
