@@ -120,6 +120,13 @@ class AudioRecorder:
             return True
         
         try:
+            if self._stream is not None:
+                # Defensively close any stream left over from a prior failed start.
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
             self.clear_buffer()
             self._state = RecorderState.RECORDING
             input_device_id = None
@@ -179,6 +186,13 @@ class AudioRecorder:
             return True
         except Exception as e:
             logger.error(f"Failed to start recording: {e}")
+            if self._stream is not None:
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
+            self._recording_started_at = None
             self._state = RecorderState.IDLE
             return False
     

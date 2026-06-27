@@ -2,10 +2,13 @@
 
 import sqlite3
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,9 +39,18 @@ class HistoryManager:
         self._max_entries = max_entries
         self._enabled = True
         self._init_db()
-    
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=30)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.Error:
+            pass
+        return conn
+
     def _init_db(self):
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,23 +100,30 @@ class HistoryManager:
             return None
         
         timestamp = datetime.now().isoformat()
-        
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.execute(
-                'INSERT INTO history (timestamp, text, profile_id, language, duration) VALUES (?, ?, ?, ?, ?)',
-                (timestamp, text, profile_id, language, duration)
-            )
-            conn.commit()
-            entry_id = cursor.lastrowid
-            
-            self._cleanup_old_entries(conn)
-            
-            return entry_id
-    
+
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    'INSERT INTO history (timestamp, text, profile_id, language, duration) VALUES (?, ?, ?, ?, ?)',
+                    (timestamp, text, profile_id, language, duration)
+                )
+                conn.commit()
+                entry_id = cursor.lastrowid
+
+                self._cleanup_old_entries(conn)
+
+                return entry_id
+        except sqlite3.Error as e:
+            # A history failure must never break the transcription delivery path.
+            logger.error("Failed to save history entry: %s", e)
+            return None
+
     def _cleanup_old_entries(self, conn):
+        # Order by id (monotonic insertion order), not timestamp, so clock
+        # changes or equal timestamps can't evict the wrong (newest) entries.
         conn.execute('''
             DELETE FROM history WHERE id NOT IN (
-                SELECT id FROM history ORDER BY timestamp DESC LIMIT ?
+                SELECT id FROM history ORDER BY id DESC LIMIT ?
             )
         ''', (self._max_entries,))
     
@@ -115,7 +134,7 @@ class HistoryManager:
         search: Optional[str] = None,
         profile_id: Optional[str] = None
     ) -> List[HistoryEntry]:
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             
             if search:
@@ -178,7 +197,7 @@ class HistoryManager:
             return entries
     
     def get_entry(self, entry_id: int) -> Optional[HistoryEntry]:
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 'SELECT id, timestamp, text, profile_id, language, duration FROM history WHERE id = ?',
@@ -197,19 +216,27 @@ class HistoryManager:
             return None
     
     def delete_entry(self, entry_id: int) -> bool:
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.execute('DELETE FROM history WHERE id = ?', (entry_id,))
-            conn.commit()
-            return cursor.rowcount > 0
-    
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute('DELETE FROM history WHERE id = ?', (entry_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error("Failed to delete history entry %s: %s", entry_id, e)
+            return False
+
     def clear_all(self) -> int:
-        with sqlite3.connect(self._db_path) as conn:
-            cursor = conn.execute('DELETE FROM history')
-            conn.commit()
-            return cursor.rowcount
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute('DELETE FROM history')
+                conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error("Failed to clear history: %s", e)
+            return 0
     
     def get_count(self, search: Optional[str] = None, profile_id: Optional[str] = None) -> int:
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             if search:
                 if profile_id:
                     cursor = conn.execute(

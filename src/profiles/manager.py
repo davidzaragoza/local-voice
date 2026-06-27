@@ -1,10 +1,15 @@
 """Profile-aware settings management with legacy migration support."""
 
 import json
+import logging
+import os
 import re
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileManager:
@@ -87,7 +92,11 @@ class ProfileManager:
         try:
             with open(self._settings_file, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-        except Exception:
+        except Exception as e:
+            # Preserve the unreadable file so the user can recover it manually
+            # instead of silently destroying their profiles/settings.
+            logger.error("Failed to read settings file, backing up and resetting: %s", e)
+            self._backup_corrupt_settings()
             self._state = self._default_state()
             self._save()
             return
@@ -102,8 +111,32 @@ class ProfileManager:
 
     def _save(self):
         self._settings_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._settings_file, "w", encoding="utf-8") as f:
-            json.dump(self._state, f, indent=4, ensure_ascii=False)
+        # Write to a temp file then atomically replace, so a crash mid-write
+        # can never leave a truncated/corrupt settings.json behind.
+        tmp_path = self._settings_file.with_suffix(self._settings_file.suffix + ".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._state, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self._settings_file)
+        except Exception as e:
+            logger.error("Failed to save settings file: %s", e)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+
+    def _backup_corrupt_settings(self):
+        try:
+            backup_path = self._settings_file.with_name(
+                f"{self._settings_file.name}.corrupt-{int(time.time())}"
+            )
+            os.replace(self._settings_file, backup_path)
+            logger.warning("Backed up corrupt settings to %s", backup_path)
+        except Exception as e:
+            logger.error("Could not back up corrupt settings file: %s", e)
 
     def _is_legacy_settings(self, data: Dict[str, Any]) -> bool:
         return "profiles" not in data or "global" not in data

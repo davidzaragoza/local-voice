@@ -1,5 +1,6 @@
 """Transcription engine using faster-whisper for offline STT."""
 
+import os
 import shutil
 import ssl
 import urllib.error
@@ -107,22 +108,37 @@ class TranscriptionEngine:
             self._vad_downloaded = True
 
     def _download_vad_model(self, vad_path: Path):
-        """Download VAD model with a certifi-backed SSL fallback for packaged apps."""
+        """Download VAD model with a certifi-backed SSL fallback for packaged apps.
+
+        Downloads to a temp file and atomically renames on success so an
+        interrupted download never leaves a truncated, unusable model behind.
+        """
+        tmp_path = vad_path.with_suffix(vad_path.suffix + ".tmp")
         try:
-            urllib.request.urlretrieve(VAD_MODEL_URL, vad_path)
-            return
-        except urllib.error.URLError as e:
-            reason = str(getattr(e, "reason", e))
-            if "CERTIFICATE_VERIFY_FAILED" not in reason:
-                raise
-            logger.warning("Default SSL certificates failed, retrying VAD download with certifi bundle")
+            try:
+                with urllib.request.urlopen(VAD_MODEL_URL, timeout=30) as response:
+                    with open(tmp_path, "wb") as output:
+                        shutil.copyfileobj(response, output)
+            except urllib.error.URLError as e:
+                reason = str(getattr(e, "reason", e))
+                if "CERTIFICATE_VERIFY_FAILED" not in reason:
+                    raise
+                logger.warning("Default SSL certificates failed, retrying VAD download with certifi bundle")
 
-        import certifi
+                import certifi
 
-        context = ssl.create_default_context(cafile=certifi.where())
-        with urllib.request.urlopen(VAD_MODEL_URL, context=context) as response:
-            with open(vad_path, "wb") as output:
-                shutil.copyfileobj(response, output)
+                context = ssl.create_default_context(cafile=certifi.where())
+                with urllib.request.urlopen(VAD_MODEL_URL, context=context, timeout=30) as response:
+                    with open(tmp_path, "wb") as output:
+                        shutil.copyfileobj(response, output)
+
+            os.replace(tmp_path, vad_path)
+        finally:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
     
     @property
     def model_dir(self) -> Path:
@@ -209,10 +225,21 @@ class TranscriptionEngine:
         task: str = "transcribe",
         callback: Optional[Callable[[str], None]] = None
     ) -> Optional[TranscriptionResult]:
+        if audio is None or audio.size == 0:
+            logger.warning("transcribe called with empty audio")
+            return None
+
         if self._model is None:
             if not self.load_model():
                 return None
-        
+
+        # Capture the model under the lock so a concurrent unload_model() cannot
+        # tear it down while we dereference it below.
+        with self._model_lock:
+            model = self._model
+        if model is None:
+            return None
+
         if audio.dtype == np.float32:
             audio_float = audio.flatten()
         else:
@@ -235,8 +262,8 @@ class TranscriptionEngine:
             if initial_prompt:
                 transcribe_kwargs['initial_prompt'] = initial_prompt
             
-            segments_generator, info = self._model.transcribe(audio_float, **transcribe_kwargs)
-            
+            segments_generator, info = model.transcribe(audio_float, **transcribe_kwargs)
+
             segments = []
             full_text = []
             
@@ -277,19 +304,27 @@ class TranscriptionEngine:
         language: Optional[str] = None,
         task: str = "transcribe"
     ) -> Generator[str, None, None]:
+        if audio is None or audio.size == 0:
+            return
+
         if self._model is None:
             if not self.load_model():
                 return
-        
+
+        with self._model_lock:
+            model = self._model
+        if model is None:
+            return
+
         if audio.dtype == np.float32:
             audio_float = audio.flatten()
         else:
             audio_float = audio.astype(np.float32).flatten()
-        
+
         initial_prompt = None
         if self._vocabulary_manager:
             initial_prompt = self._vocabulary_manager.get_initial_prompt()
-        
+
         try:
             transcribe_kwargs = {
                 'language': language or self._current_config.language,
@@ -297,11 +332,11 @@ class TranscriptionEngine:
                 'beam_size': self._current_config.beam_size,
                 'vad_filter': self._current_config.vad_filter
             }
-            
+
             if initial_prompt:
                 transcribe_kwargs['initial_prompt'] = initial_prompt
-            
-            segments_generator, _ = self._model.transcribe(audio_float, **transcribe_kwargs)
+
+            segments_generator, _ = model.transcribe(audio_float, **transcribe_kwargs)
             
             for segment in segments_generator:
                 text = segment.text
