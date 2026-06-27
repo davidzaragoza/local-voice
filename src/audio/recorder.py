@@ -113,7 +113,10 @@ class AudioRecorder:
         audio_data = self.get_audio_data()
         if audio_data is None:
             return None
-        return (audio_data * 32767).astype(np.int16).tobytes()
+        # Clip to [-1, 1] before scaling so float samples slightly above 1.0
+        # don't wrap around to loud clicks when cast to int16.
+        clipped = np.clip(audio_data, -1.0, 1.0)
+        return (clipped * 32767).astype(np.int16).tobytes()
     
     def clear_buffer(self):
         with self._lock:
@@ -293,7 +296,12 @@ class AudioRecorder:
         return devices
     
     def set_input_device(self, device_id: int):
-        sd.default.device[0] = device_id
+        try:
+            current = sd.default.device
+            output_device = current[1] if isinstance(current, (list, tuple)) else None
+            sd.default.device = (device_id, output_device)
+        except Exception as e:
+            logger.warning("Could not set input device %s: %s", device_id, e)
     
     def __enter__(self):
         return self

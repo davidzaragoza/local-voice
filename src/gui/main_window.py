@@ -182,6 +182,9 @@ class FloatingWindow(QWidget):
         super().__init__(parent)
         self._state = AppState.IDLE
         self._drag_pos = None
+        self._press_global_pos: Optional[QPoint] = None
+        self._dragging = False
+        self._drag_threshold = 5
         self._opacity = 0.95
         self._recording_start_time: Optional[datetime] = None
         self._duration_timer = QTimer(self)
@@ -302,7 +305,7 @@ class FloatingWindow(QWidget):
         self._update_tooltip()
     
     def _format_hotkey(self, hotkey: str) -> str:
-        return hotkey.replace('_', ' ').replace('+', '+').title()
+        return hotkey.replace('_', ' ').title().replace('+', ' + ')
     
     def _update_tooltip(self):
         mode_text = "Hold" if self._hotkey_mode == "hold" else "Toggle"
@@ -359,18 +362,32 @@ class FloatingWindow(QWidget):
     
     def eventFilter(self, obj, event):
         if obj == self.mic_button:
-            if event.type() in (event.Type.MouseButtonPress, event.Type.MouseMove, event.Type.MouseButtonRelease):
-                if event.type() == event.Type.MouseButtonPress:
-                    if event.button() == Qt.MouseButton.LeftButton:
-                        self._drag_pos = event.globalPosition().toPoint() - self.pos()
+            if event.type() == event.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    global_pos = event.globalPosition().toPoint()
+                    self._press_global_pos = global_pos
+                    self._drag_pos = global_pos - self.pos()
+                    self._dragging = False
+                    # Don't consume: let the button register the press so a
+                    # genuine click still emits clicked() on release.
+                    return False
+            elif event.type() == event.Type.MouseMove:
+                if self._drag_pos is not None and self._press_global_pos is not None:
+                    global_pos = event.globalPosition().toPoint()
+                    delta = global_pos - self._press_global_pos
+                    if not self._dragging and delta.manhattanLength() >= self._drag_threshold:
+                        self._dragging = True
+                    if self._dragging:
+                        self.move(global_pos - self._drag_pos)
                         return True
-                elif event.type() == event.Type.MouseMove:
-                    if self._drag_pos is not None:
-                        self.move(event.globalPosition().toPoint() - self._drag_pos)
+            elif event.type() == event.Type.MouseButtonRelease:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    was_dragging = self._dragging
+                    self._drag_pos = None
+                    self._press_global_pos = None
+                    self._dragging = False
+                    # Consume the release only if we actually dragged, so the
+                    # button's click isn't emitted after a move.
+                    if was_dragging:
                         return True
-                elif event.type() == event.Type.MouseButtonRelease:
-                    if event.button() == Qt.MouseButton.LeftButton:
-                        if self._drag_pos is not None:
-                            self._drag_pos = None
-                            return True
         return super().eventFilter(obj, event)

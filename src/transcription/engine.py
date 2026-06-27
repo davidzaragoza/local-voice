@@ -367,5 +367,7 @@ class TranscriptionEngine:
             {'size': ModelSize.SMALL.value, 'name': 'Small', 'params': '244M', 'speed': 'medium'},
             {'size': ModelSize.SMALL_EN.value, 'name': 'Small (English)', 'params': '244M', 'speed': 'medium'},
             {'size': ModelSize.MEDIUM.value, 'name': 'Medium', 'params': '769M', 'speed': 'slow'},
+            {'size': ModelSize.MEDIUM_EN.value, 'name': 'Medium (English)', 'params': '769M', 'speed': 'slow'},
+            {'size': ModelSize.LARGE_V2.value, 'name': 'Large v2', 'params': '1550M', 'speed': 'slowest'},
             {'size': ModelSize.LARGE_V3.value, 'name': 'Large v3', 'params': '1550M', 'speed': 'slowest'},
         ]
