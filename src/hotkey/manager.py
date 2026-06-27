@@ -188,88 +188,90 @@ class HotkeyManager:
         return all_mods == self._modifiers_pressed
     
     def _on_press(self, key):
+        # Decide which callback to fire while holding the lock, then invoke it
+        # AFTER releasing the lock so a slow/blocking callback can never stall
+        # the listener thread or deadlock against update_config()/stop().
+        callback = None
         with self._lock:
             if isinstance(key, Key) and self._is_modifier_key(key):
                 mod_name = self._get_modifier_name(key)
                 if mod_name:
                     self._modifiers_pressed.add(mod_name)
-                
+
                 if self._is_primary_a_modifier():
                     if self._all_hotkey_modifiers_pressed() and self._check_modifiers_match():
+                        if not self._key_pressed:
+                            self._key_pressed = True
+                            if self.config.mode == "hold":
+                                callback = self._on_start_callback
+                            elif self.config.mode == "toggle":
+                                callback = self._on_toggle_callback
+            else:
+                primary = self._get_key(self.config.primary_key)
+
+                is_primary = False
+                if isinstance(key, Key):
+                    is_primary = key == primary
+                elif isinstance(key, KeyCode):
+                    try:
+                        char = key.char
+                        if char and char.lower() == self.config.primary_key.lower():
+                            is_primary = True
+                    except AttributeError:
+                        pass
+
+                if is_primary and self._check_modifiers_match():
+                    if not self._key_pressed:
+                        self._key_pressed = True
                         if self.config.mode == "hold":
-                            if not self._key_pressed:
-                                self._key_pressed = True
-                                if self._on_start_callback:
-                                    self._on_start_callback()
+                            callback = self._on_start_callback
                         elif self.config.mode == "toggle":
-                            if not self._key_pressed:
-                                self._key_pressed = True
-                                if self._on_toggle_callback:
-                                    self._on_toggle_callback()
-                return
-            
-            primary = self._get_key(self.config.primary_key)
-            
-            is_primary = False
-            if isinstance(key, Key):
-                is_primary = key == primary
-            elif isinstance(key, KeyCode):
-                try:
-                    char = key.char
-                    if char and char.lower() == self.config.primary_key.lower():
-                        is_primary = True
-                except AttributeError:
-                    pass
-            
-            if is_primary and self._check_modifiers_match():
-                if self.config.mode == "hold":
-                    if not self._key_pressed:
-                        self._key_pressed = True
-                        if self._on_start_callback:
-                            self._on_start_callback()
-                elif self.config.mode == "toggle":
-                    if not self._key_pressed:
-                        self._key_pressed = True
-                        if self._on_toggle_callback:
-                            self._on_toggle_callback()
-    
+                            callback = self._on_toggle_callback
+
+        if callback:
+            callback()
+
     def _on_release(self, key):
+        callback = None
         with self._lock:
             if isinstance(key, Key) and self._is_modifier_key(key):
                 mod_name = self._get_modifier_name(key)
-                
+
                 if self._is_primary_a_modifier():
                     if self._key_pressed and mod_name in self._modifiers_pressed:
                         self._key_pressed = False
                         if self.config.mode == "hold":
-                            if self._on_stop_callback:
-                                self._on_stop_callback()
-                
+                            callback = self._on_stop_callback
+
                 if mod_name:
                     self._modifiers_pressed.discard(mod_name)
-                return
-            
-            primary = self._get_key(self.config.primary_key)
-            
-            is_primary = False
-            if isinstance(key, Key):
-                is_primary = key == primary
-            elif isinstance(key, KeyCode):
-                try:
-                    char = key.char
-                    if char and char.lower() == self.config.primary_key.lower():
-                        is_primary = True
-                except AttributeError:
-                    pass
-            
-            if is_primary and self._check_modifiers_match():
-                if self.config.mode == "hold":
-                    if self._key_pressed:
+            else:
+                primary = self._get_key(self.config.primary_key)
+
+                is_primary = False
+                if isinstance(key, Key):
+                    is_primary = key == primary
+                elif isinstance(key, KeyCode):
+                    try:
+                        char = key.char
+                        if char and char.lower() == self.config.primary_key.lower():
+                            is_primary = True
+                    except AttributeError:
+                        pass
+
+                # Clear _key_pressed on primary-key release regardless of whether
+                # the modifiers still match: otherwise releasing a modifier first
+                # leaves a toggle hotkey stuck and the next press is ignored.
+                if is_primary:
+                    if self.config.mode == "hold":
+                        if self._key_pressed:
+                            self._key_pressed = False
+                            callback = self._on_stop_callback
+                    elif self.config.mode == "toggle":
                         self._key_pressed = False
-                        if self._on_stop_callback:
-                            self._on_stop_callback()
-                elif self.config.mode == "toggle":
-                    self._key_pressed = False
+
+        if callback:
+            callback()
     
     def start(self) -> bool:
         if self._running:
@@ -304,17 +306,20 @@ class HotkeyManager:
             return False
     
     def stop(self):
-        self._running = False
-        self._key_pressed = False
-        self._modifiers_pressed.clear()
-        
-        if self._listener:
+        with self._lock:
+            self._running = False
+            self._key_pressed = False
+            self._modifiers_pressed.clear()
+            listener = self._listener
+            self._listener = None
+
+        # Join outside the lock; never call this from the listener thread.
+        if listener:
             try:
-                self._listener.stop()
-                self._listener.join(timeout=2.0)
+                listener.stop()
+                listener.join(timeout=2.0)
             except Exception:
                 pass
-            self._listener = None
     
     def update_config(self, config: HotkeyConfig):
         with self._lock:

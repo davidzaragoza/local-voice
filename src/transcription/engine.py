@@ -67,6 +67,8 @@ class TranscriptionEngine:
     _current_config: Optional[TranscriptionConfig] = None
     _vad_downloaded = False
     _vocabulary_manager: Optional['VocabularyManager'] = None
+    _resolved_device: Optional[str] = None
+    _resolved_compute_type: Optional[str] = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -193,15 +195,23 @@ class TranscriptionEngine:
                 if progress_callback:
                     progress_callback(0.3)
                 
+                logger.info(
+                    "Loading model '%s' on device=%s compute_type=%s",
+                    config.model_size.value, device, compute_type,
+                )
                 self._model = WhisperModel(
                     config.model_size.value,
                     device=device,
                     compute_type=compute_type,
                     download_root=str(self.model_dir)
                 )
-                
+
+                # Keep the requested config for the equality short-circuit, and
+                # record the resolved device/compute_type for observability.
                 self._current_config = config
-                
+                self._resolved_device = device
+                self._resolved_compute_type = compute_type
+
                 if progress_callback:
                     progress_callback(1.0)
                 

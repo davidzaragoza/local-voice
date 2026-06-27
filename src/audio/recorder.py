@@ -82,17 +82,25 @@ class AudioRecorder:
         self._detect_voice_activity(audio_chunk)
     
     def _detect_voice_activity(self, audio_chunk: np.ndarray):
-        rms = np.sqrt(np.mean(audio_chunk ** 2))
+        if audio_chunk.size == 0:
+            return
+
+        rms = float(np.sqrt(np.mean(audio_chunk ** 2)))
         is_voice = rms > self.config.silence_threshold
-        
+
+        # Edge-triggered: only notify on a state transition so the callback
+        # fires once on voice start and once on voice end, not on every block.
         if is_voice:
-            self._voice_detected = True
             self._silence_start = None
-            if self._on_vad_callback:
-                self._on_vad_callback(True)
+            if not self._voice_detected:
+                self._voice_detected = True
+                if self._on_vad_callback:
+                    self._on_vad_callback(True)
         else:
-            if self._on_vad_callback and self._voice_detected:
-                self._on_vad_callback(False)
+            if self._voice_detected:
+                self._voice_detected = False
+                if self._on_vad_callback:
+                    self._on_vad_callback(False)
     
     def get_audio_data(self) -> Optional[np.ndarray]:
         with self._lock:
